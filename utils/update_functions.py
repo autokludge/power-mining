@@ -387,7 +387,7 @@ def save_system_from_fsdjump(message, DATABASE_URL, max_distance=2000.0):
                     id64, name, x, y, z, distance_from_sol, 
                     controlling_power, power_state, powers_acquiring,
                     primary_economy, secondary_economy, security, 
-                    system_government, last_updated
+                    government, last_updated
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s, 
                     %s, %s, %s::jsonb,
@@ -406,7 +406,7 @@ def save_system_from_fsdjump(message, DATABASE_URL, max_distance=2000.0):
                     primary_economy = COALESCE(EXCLUDED.primary_economy, systems.primary_economy),
                     secondary_economy = COALESCE(EXCLUDED.secondary_economy, systems.secondary_economy),
                     security = COALESCE(EXCLUDED.security, systems.security),
-                    system_government = COALESCE(EXCLUDED.system_government, systems.system_government),
+                    government = COALESCE(EXCLUDED.government, systems.government),
                     last_updated = EXCLUDED.last_updated
                 RETURNING id64
             """, (
