@@ -369,7 +369,7 @@ def convert_json_to_sqlite(json_file: str, db_file: str, max_distance: float, ex
                 
                 # Create stations table entries
                 for station, body_name in all_stations:
-                    market_update_time = station['market'].get('updateTime')
+                    market_update_time = station.get('market', {}).get('updateTime')
                     
                     c.execute('''
                         INSERT OR REPLACE INTO stations 
@@ -425,28 +425,32 @@ def convert_json_to_sqlite(json_file: str, db_file: str, max_distance: float, ex
                 
                 # Process station commodities
                 for station, body_name in all_stations:
-                    if station.get('type') == 'Drake-Class Carrier' or 'carrierName' in station:
-                        continue
-                    # Track market statistics
-                    if 'market' in station:
-                        stations_with_market += 1
-                    else:
-                        stations_without_market += 1
-                    # Only process commodities if station has a market
-                    if 'market' in station:
-                        for commodity in extract_station_commodities(conn, station):
-                            c.execute('''
-                                INSERT INTO station_commodities_mapped 
-                                (system_id64, station_id, station_name, commodity_id, sell_price, demand)
-                                VALUES (?, ?, ?, ?, ?, ?)
-                            ''', (
-                                system['id64'],
-                                station.get('id'),
-                                commodity['station_name'],
-                                commodity['commodity_id'],  # Use ID instead of name
-                                commodity['sell_price'],
-                                commodity['demand']
-                            ))
+                    try:
+                        if station.get('type') == 'Drake-Class Carrier' or 'carrierName' in station:
+                            continue
+                        # Track market statistics
+                        if 'market' in station:
+                            stations_with_market += 1
+                        else:
+                            stations_without_market += 1
+                        # Only process commodities if station has a market
+                        if 'market' in station:
+                            for commodity in extract_station_commodities(conn, station):
+                                c.execute('''
+                                    INSERT INTO station_commodities_mapped 
+                                    (system_id64, station_id, station_name, commodity_id, sell_price, demand)
+                                    VALUES (?, ?, ?, ?, ?, ?)
+                                ''', (
+                                    system['id64'],
+                                    station.get('id'),
+                                    commodity['station_name'],
+                                    commodity['commodity_id'],  # Use ID instead of name
+                                    commodity['sell_price'],
+                                    commodity['demand']
+                                ))
+                    except Exception as e:
+                        print(f"Warning: Error processing station {station.get('name')} in system {system['name']}: {str(e)}")
+                        # Continue with the next station instead of failing entirely
                 
                 # Update total stations
                 total_stations = system_stations + body_stations

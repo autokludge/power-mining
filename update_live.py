@@ -13,19 +13,15 @@ import zmq
 from psycopg2.extras import DictCursor
 import atexit
 import platform
-
-# ANSI color codes
-YELLOW = '\033[93m'  # Default color
-BLUE = '\033[94m'
-MAGENTA = '\033[92m'
-RED = '\033[91m'
-CYAN = '\033[96m' 
-ORANGE = '\033[38;5;208m'
-GREEN = '\033[95m'  
-RESET = '\033[0m'
-
-# Debug levels
-DEBUG_LEVEL = 2  # 1 = critical/important, 2 = normal, 3 = verbose/detailed
+from utils.update_functions import (
+    handle_colony_ship_event,
+    save_colony_ship_to_db,
+    handle_saa_signals,
+    save_system_from_fsdjump,
+    save_station_from_docked,
+    update_station_body_from_location
+)
+from utils.update_log import log_message, format_tag, set_debug_level, ICONS, DEBUG_LEVEL, YELLOW, BLUE, MAGENTA, RED, CYAN, ORANGE, GREEN, RESET
 
 # Constants
 DATABASE_URL = None  # Will be set from args or env in main()
@@ -40,40 +36,11 @@ DB_UPDATE_INTERVAL = 20
 # Debug flag for detailed commodity changes
 DEBUG = False
 
-# Icon Mapping
-ICONS = {
-    "COLONY": "🚩",
-    "DOCKED": "🚢",
-    "UNDOCKED": "🚤",
-    "UNKNOWN": "❓",
-    "POWER": "🔻",
-    "HEMATITE": "💎",
-    "STATE": "🏛️",
-    "DATABASE": "💾",
-    "STATUS": "📊",
-    "ERROR": "❌",
-    "COMMODITY": "📦",
-    "INIT": "🚀",
-    "STOPPING": "🛑",
-    "CONNECTED": "🔌",
-    "MODE": "⚙️",
-    "TERMINATED": "🏁",
-    "DEBUG": "🔍",
-    "JOURNAL": "📓",
-    "ROUTER": "🔀"
-}
-
 # Global state
 running = True
 commodity_buffer = {}
 commodity_map = {}
 reverse_map = {}
-
-
-def format_tag(tag):
-    """Format a tag with its icon if available - returns [ICON TAG]"""
-    icon = ICONS.get(tag, "")
-    return f"[{icon} {tag}]" if icon else f"[{tag}]"
 
 # Global commodity ID mapping
 def get_commodity_ids(conn):
@@ -85,29 +52,6 @@ def get_commodity_ids(conn):
 def get_timestamp():
     """Get current timestamp in YYYY:MM:DD-HH:MM:SS format"""
     return datetime.now().strftime("%Y:%m:%d-%H:%M:%S")
-
-def log_message(tag, message, level=2):
-    """Log a message with timestamp and PID"""
-    # Skip messages with level higher than DEBUG_LEVEL
-    if DEBUG_LEVEL == 0 or level > DEBUG_LEVEL:
-        return
-        
-    timestamp = datetime.now().strftime("%Y:%m:%d-%H:%M:%S")
-    color = YELLOW  # Default color
-    
-    if tag == "STATUS":
-        color = RED
-    elif tag == "DATABASE":
-        color = CYAN
-    elif tag == "COLONY":
-        color = YELLOW
-    elif tag == "POWER":
-        color = MAGENTA        
-    elif tag == "ERROR":
-        color = RED
-    
-    formatted_tag = format_tag(tag)
-    print(f"{color}[{timestamp}] [{os.getpid()}] {formatted_tag} {message}{RESET}", flush=True)
 
 # ZMQ setup
 zmq_context = zmq.Context()
@@ -427,11 +371,10 @@ def handle_power_data(message):
             if powers_changed:
                 changes.append(f"powers_acquiring: {current_powers} -> {powers}")
             
-            # Get current timestamp and adjust it by subtracting one hour
-            # current_timestamp = datetime.now(timezone.utc) - timedelta(hours=1)
+            # Get current timestamp
             current_timestamp = datetime.now(timezone.utc)
             
-            # Always update controlling_power and power_state
+            # Always update controlling_power, power_state, and last_updated
             update_fields = ["controlling_power = %s", "power_state = %s", "last_updated = %s"]
             params = [controlling_power, power_state, current_timestamp]
             
@@ -440,7 +383,7 @@ def handle_power_data(message):
                 update_fields.append("powers_acquiring = %s::jsonb")
                 params.append(json.dumps(powers))
                 
-            # Always update
+            # Always update the system record with latest timestamp
             query = f"""
                 UPDATE systems 
                 SET {', '.join(update_fields)}
@@ -457,7 +400,7 @@ def handle_power_data(message):
                 if changes:
                     log_message("POWER", MAGENTA + f"✓ Updated power status for {system_name}: {', '.join(changes)}", level=1)
                 else:
-                    log_message("POWER", MAGENTA + f"✓ Refreshed power status for {system_name} (no changes detected)", level=1)
+                    log_message("POWER", MAGENTA + f"✓ Refreshed power status for {system_name} (no changes detected, timestamp updated)", level=1)
                 
                 # Log the timestamp update
                 if updated_timestamp:
@@ -515,191 +458,33 @@ def handle_system_state(data):
             db_state = row[0]
             log_message("STATE", GREEN + f"Comparing state: DB='{db_state}' vs Current='{current_state}'", level=2)
             
+            # Get the current timestamp
+            current_timestamp = datetime.now(timezone.utc)
+            
             # Update if states differ
             if db_state != current_state:
                 log_message("STATE", GREEN + f"Updating state from '{db_state}' to '{current_state}'", level=2)
                 cursor.execute("""
                     UPDATE systems 
-                    SET system_state = %s 
+                    SET system_state = %s, last_updated = %s
                     WHERE id64 = %s
-                """, (current_state, data['SystemAddress']))
+                """, (current_state, current_timestamp, data['SystemAddress']))
                 conn.commit()
-                log_message("STATE", GREEN + f"Writing to database: system_state = '{current_state}'", level=2)
+                log_message("STATE", GREEN + f"Writing to database: system_state = '{current_state}', last_updated = '{current_timestamp}'", level=2)
             else:
-                log_message("STATE", GREEN + "Disregarding state update - no change", level=2)
+                # Even if state hasn't changed, update the timestamp
+                cursor.execute("""
+                    UPDATE systems 
+                    SET last_updated = %s
+                    WHERE id64 = %s
+                """, (current_timestamp, data['SystemAddress']))
+                conn.commit()
+                log_message("STATE", GREEN + f"State unchanged but updated timestamp to {current_timestamp}", level=2)
                 
     except Exception as e:
         log_message("STATE", GREEN + f"Error updating system state: {str(e)}", level=1)
         import traceback
         log_message("STATE", GREEN + f"Traceback: {traceback.format_exc()}", level=1)
-
-def handle_colony_ship_event(message, event_type):
-    """Process colony ship events (Docked and FSSSignalDiscovered)"""
-    try:
-        # Check if this is a colony ship event
-        is_colony_ship = False
-        
-        if event_type == 'Docked':
-            station_name = message.get('StationName', '')
-            is_colony_ship = station_name == 'System Colonisation Ship'
-        elif event_type == 'FSSSignalDiscovered':
-            signal_name = message.get('SignalName', '')
-            is_colony_ship = signal_name == 'System Colonisation Ship'
-        
-        if not is_colony_ship:
-            return
-        
-        # Extract common fields
-        system_id64 = message.get('SystemAddress')
-        if not system_id64:
-            log_message("COLONY", YELLOW + f"Missing SystemAddress in {event_type} event", level=1)
-            return
-        
-        # Get system name from database
-        system_name = None
-        try:
-            with psycopg2.connect(DATABASE_URL) as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT name
-                    FROM systems
-                    WHERE id64 = %s
-                """, (system_id64,))
-                row = cursor.fetchone()
-                if row:
-                    system_name = row[0]
-        except Exception as e:
-            log_message("ERROR", f"Failed to get system name for ID64 {system_id64}: {str(e)}", level=1)
-        
-        # Initialize database fields
-        station_id = None
-        station_name = None
-        station_type = None
-        station_faction = None
-        station_government = None
-        economy = None
-        economies = None
-        landing_pads = None
-        signal_type = None
-        
-        if event_type == 'Docked':
-            # Extract Docked event specific fields
-            station_name = message.get('StationName')
-            station_type = message.get('StationType')
-            station_id = message.get('MarketID')
-            station_faction = message.get('StationFaction')
-            station_government = message.get('StationGovernment_Localised')
-            economy = message.get('StationEconomy_Localised')
-            economies = message.get('StationEconomies')
-            landing_pads = message.get('LandingPads')
-            
-            log_message("COLONY", YELLOW + f"✓ Docked at colony ship in {system_name or 'Unknown System'} (ID64: {system_id64})", level=1)
-        elif event_type == 'FSSSignalDiscovered':
-            # Extract FSSSignalDiscovered event specific fields
-            station_name = message.get('SignalName')
-            signal_type = message.get('SignalType')
-            
-            log_message("COLONY", YELLOW + f"✓ Discovered colony ship in {system_name or 'Unknown System'} (ID64: {system_id64})", level=1)
-        
-        # Save to database
-        save_colony_ship_to_db(
-            system_id64=system_id64,
-            station_id=station_id,
-            station_name=station_name,
-            station_type=station_type,
-            station_faction=station_faction,
-            station_government=station_government,
-            economy=economy,
-            economies=economies,
-            landing_pads=landing_pads,
-            signal_type=signal_type
-        )
-        
-    except Exception as e:
-        log_message("ERROR", f"Error processing colony ship event: {str(e)}", level=1)
-        import traceback
-        log_message("ERROR", f"Traceback: {traceback.format_exc()}", level=1)
-
-def save_colony_ship_to_db(system_id64, station_name, station_id=None, station_type=None, 
-                          station_faction=None, station_government=None, economy=None, 
-                          economies=None, landing_pads=None, signal_type=None):
-    """Save colony ship information to the database"""
-    try:
-        if not system_id64 or not station_name:
-            log_message("ERROR", "Missing required fields for colony ship database entry", level=1)
-            return False
-        
-        # Convert JSON fields to strings if they're not None
-        station_faction_json = json.dumps(station_faction) if station_faction else None
-        economies_json = json.dumps(economies) if economies else None
-        landing_pads_json = json.dumps(landing_pads) if landing_pads else None
-        
-        # Start transaction
-        with psycopg2.connect(DATABASE_URL) as conn:
-            cursor = conn.cursor()
-            cursor.execute("BEGIN")
-            
-            try:
-                # Use an UPSERT pattern with ON CONFLICT to handle duplicates
-                cursor.execute("""
-                    INSERT INTO colony_systems (
-                        system_id64, station_id, station_name, station_type,
-                        station_faction, station_government, economy,
-                        economies, landing_pads, signal_type,
-                        first_seen, last_updated
-                    ) VALUES (
-                        %s, %s, %s, %s, 
-                        %s::jsonb, %s, %s, 
-                        %s::jsonb, %s::jsonb, %s,
-                        NOW(), NOW()
-                    )
-                    ON CONFLICT (system_id64, station_name)
-                    DO UPDATE SET 
-                        station_id = COALESCE(EXCLUDED.station_id, colony_systems.station_id),
-                        station_type = COALESCE(EXCLUDED.station_type, colony_systems.station_type),
-                        station_faction = COALESCE(EXCLUDED.station_faction, colony_systems.station_faction),
-                        station_government = COALESCE(EXCLUDED.station_government, colony_systems.station_government),
-                        economy = COALESCE(EXCLUDED.economy, colony_systems.economy),
-                        economies = COALESCE(EXCLUDED.economies, colony_systems.economies),
-                        landing_pads = COALESCE(EXCLUDED.landing_pads, colony_systems.landing_pads),
-                        signal_type = COALESCE(EXCLUDED.signal_type, colony_systems.signal_type),
-                        last_updated = NOW()
-                    RETURNING id, (xmax = 0) AS is_insert
-                """, (
-                    system_id64, station_id, station_name, station_type,
-                    station_faction_json, station_government, economy,
-                    economies_json, landing_pads_json, signal_type
-                ))
-                
-                # Get the result to determine if this was an insert or update
-                result = cursor.fetchone()
-                if result:
-                    record_id, is_insert = result
-                    if is_insert:
-                        log_message("COLONY", YELLOW + f"✓ Created new colony ship record in database (ID: {record_id})", level=1)
-                    else:
-                        log_message("COLONY", YELLOW + f"✓ Updated existing colony ship record in database (ID: {record_id})", level=1)
-                else:
-                    log_message("ERROR", "Failed to insert/update colony ship record - no result returned", level=1)
-                    cursor.execute("ROLLBACK")
-                    return False
-                
-                # Commit transaction
-                conn.commit()
-                return True
-                
-            except Exception as e:
-                log_message("ERROR", f"Database error saving colony ship: {str(e)}", level=1)
-                import traceback
-                log_message("ERROR", f"Traceback: {traceback.format_exc()}", level=1)
-                cursor.execute("ROLLBACK")
-                return False
-                
-    except Exception as e:
-        log_message("ERROR", f"Error saving colony ship to database: {str(e)}", level=1)
-        import traceback
-        log_message("ERROR", f"Traceback: {traceback.format_exc()}", level=1)
-        return False
 
 def process_journal_message(message):
     """
@@ -728,19 +513,33 @@ def process_journal_message(message):
         
         # Route based on event type
         if event_type == 'FSDJump':
+            # First save/update the system data
+            save_system_from_fsdjump(msg_data, DATABASE_URL, max_distance=2000.0)
+            
             # Process power data
             handle_power_data(msg_data)
             # Process system state
             handle_system_state(msg_data)
             return True
+        # Process Location events with docked info to update station body
+        elif event_type == 'Location' and msg_data.get('Docked') == True:
+            # Update station body info if currently NULL
+            update_station_body_from_location(msg_data, DATABASE_URL)
+            return True
         # Process colony ship events
         elif event_type == 'Docked' or event_type == 'FSSSignalDiscovered':
-            handle_colony_ship_event(msg_data, event_type)
+            # First check if this is a regular station docking event
+            if event_type == 'Docked' and 'MarketID' in msg_data:
+                # Save the station data if not already in database
+                save_station_from_docked(msg_data, DATABASE_URL)
+            
+            # Call imported function directly with needed parameters for colony ships
+            handle_colony_ship_event(msg_data, event_type, DATABASE_URL)
             return True
         # Process signals events
         elif event_type == 'SAASignalsFound':
-            # Process SAASignalsFound events
-            handle_saa_signals(msg_data)
+            # Call imported function directly with needed parameters
+            handle_saa_signals(msg_data, DATABASE_URL)
             return True
         else:
             # Unknown or unhandled event type
@@ -749,111 +548,6 @@ def process_journal_message(message):
             
     except Exception as e:
         log_message("ERROR", f"Error processing journal message: {str(e)}", level=1)
-        import traceback
-        log_message("ERROR", f"Traceback: {traceback.format_exc()}", level=1)
-        return False
-
-def handle_saa_signals(message):
-    """Process SAASignalsFound events to track Haematite signals"""
-    try:
-        # Extract basic information
-        timestamp = message.get("timestamp")
-        body_name = message.get("BodyName")
-        system_id64 = message.get("SystemAddress")
-        body_id = message.get("BodyID")
-        signals = message.get("Signals", [])
-        
-        # Validate required fields
-        if not all([timestamp, body_name, system_id64, body_id, signals]):
-            log_message("ERROR", f"Missing required fields in SAASignalsFound event", level=1)
-            return False
-        
-        # Check if any signals are Haematite/Hematite (with various spellings)
-        hematite_signals = []
-        for signal in signals:
-            signal_type = signal.get("Type", "")
-            if signal_type.lower() in ["haematite", "hematite", "hamaetite", "hemaetite"]:
-                hematite_signals.append(signal)
-        
-        # Only proceed if we found Hematite signals
-        if not hematite_signals:
-            log_message("DEBUG", f"No Haematite signals found in {body_name}", level=3)
-            return False
-        
-        # Get system name from database
-        system_name = None
-        try:
-            with psycopg2.connect(DATABASE_URL) as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT name FROM systems WHERE id64 = %s", (system_id64,))
-                result = cursor.fetchone()
-                if result:
-                    system_name = result[0]
-        except Exception as e:
-            log_message("ERROR", f"Error fetching system name: {str(e)}", level=1)
-        
-        if not system_name:
-            system_name = f"Unknown System ({system_id64})"
-        
-        # Process hematite signals
-        total_count = sum(signal.get("Count", 0) for signal in hematite_signals)
-        log_message("HEMATITE", RED + f"Found {total_count} Haematite signals on {body_name} in {system_name}", level=1)
-        
-        # Save each hematite signal to the database
-        for signal in hematite_signals:
-            signal_type = signal.get("Type", "")
-            signal_count = signal.get("Count", 0)
-            
-            # Standardize to Haematite
-            if signal_type.lower() in ["haematite", "hematite", "hamaetite", "hemaetite"]:
-                signal_type = "Haematite"
-            
-            try:
-                with psycopg2.connect(DATABASE_URL) as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("BEGIN")
-                    
-                    # Check if signal exists already
-                    cursor.execute("""
-                        SELECT id, signal_count 
-                        FROM haematite_signals 
-                        WHERE system_id64 = %s AND body_name = %s AND mineral_type = %s
-                    """, (system_id64, body_name, signal_type))
-                    
-                    result = cursor.fetchone()
-                    if result:
-                        # Signal exists, update if count has changed
-                        signal_id, existing_count = result
-                        if existing_count != signal_count:
-                            cursor.execute("""
-                                UPDATE haematite_signals 
-                                SET signal_count = %s, last_updated = NOW()
-                                WHERE id = %s
-                            """, (signal_count, signal_id))
-                            log_message("HEMATITE", RED + f"Updated {signal_type} count for {body_name} from {existing_count} to {signal_count}", level=2)
-                    else:
-                        # New signal, insert it
-                        cursor.execute("""
-                            INSERT INTO haematite_signals 
-                            (system_id64, body_name, mineral_type, signal_count, first_seen, last_updated)
-                            VALUES (%s, %s, %s, %s, NOW(), NOW())
-                        """, (system_id64, body_name, signal_type, signal_count))
-                        log_message("HEMATITE", RED + f"Added new {signal_type} signal for {body_name} with count {signal_count}", level=2)
-                    
-                    conn.commit()
-            except Exception as e:
-                log_message("ERROR", f"Error saving Haematite signal to database: {str(e)}", level=1)
-                import traceback
-                log_message("ERROR", f"Traceback: {traceback.format_exc()}", level=1)
-                try:
-                    conn.rollback()
-                except:
-                    pass
-        
-        return True
-        
-    except Exception as e:
-        log_message("ERROR", f"Error processing SAASignalsFound event: {str(e)}", level=1)
         import traceback
         log_message("ERROR", f"Traceback: {traceback.format_exc()}", level=1)
         return False
