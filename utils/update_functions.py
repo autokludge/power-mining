@@ -362,9 +362,14 @@ def save_system_from_fsdjump(message, DATABASE_URL, max_distance=2000.0):
     primary_economy = message.get("SystemEconomy", "").replace("$economy_", "").replace(";", "")
     secondary_economy = message.get("SystemSecondEconomy", "").replace("$economy_", "").replace(";", "")
     
-    # Extract security and government
-    security = message.get("SystemSecurity", "").replace("$GALAXY_MAP_INFO_state_", "").replace(";", "")
-    government = message.get("SystemGovernment", "").replace("$government_", "").replace(";", "")
+    # Extract security and government - correctly formatted from Journal format
+    security = message.get("SystemSecurity", "")
+    if security.startswith("$GALAXY_MAP_INFO_state_"):
+        security = security[len("$GALAXY_MAP_INFO_state_"):].rstrip(";")
+    
+    government = message.get("SystemGovernment", "")
+    if government.startswith("$government_"):
+        government = government[len("$government_"):].rstrip(";")
     
     # Get current timestamp in UTC
     from datetime import datetime, timezone
@@ -436,6 +441,7 @@ def save_station_from_docked(message, DATABASE_URL):
     Only saves the station if:
     1. We have a matching system in the database (by SystemAddress)
     2. We don't already have this station (by MarketID) in the database
+    3. Station is not a Fleet Carrier
     
     Args:
         message (dict): Docked event data
@@ -450,6 +456,11 @@ def save_station_from_docked(message, DATABASE_URL):
     system_id64 = message.get("SystemAddress")
     station_type = message.get("StationType")
     
+    # Skip Fleet Carriers
+    if station_type == "FleetCarrier":
+        log_message("STATION", f"Skipping Fleet Carrier {station_name}", level=2)
+        return True
+    
     # Validate required fields
     if not all([station_name, market_id, system_id64]):
         log_message("ERROR", f"Missing required station info in Docked event", level=1)
@@ -459,7 +470,11 @@ def save_station_from_docked(message, DATABASE_URL):
     primary_economy = None
     station_economy = message.get("StationEconomy")
     if station_economy:
-        primary_economy = station_economy.replace("$economy_", "").replace(";", "")
+        # Parse economy string correctly
+        if station_economy.startswith("$economy_"):
+            primary_economy = station_economy[len("$economy_"):].rstrip(";")
+        else:
+            primary_economy = station_economy
     
     distance_to_arrival = message.get("DistFromStarLS")
     
