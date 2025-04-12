@@ -25,10 +25,14 @@ def handle_colony_ship_event(message, event_type, DATABASE_URL):
         
         if event_type == 'Docked':
             station_name = message.get('StationName', '')
-            is_colony_ship = station_name == 'System Colonisation Ship'
+            # Check both exact match and the formatted version
+            is_colony_ship = (station_name == 'System Colonisation Ship' or 
+                             station_name == '$EXT_PANEL_ColonisationShip:#index=1;')
         elif event_type == 'FSSSignalDiscovered':
             signal_name = message.get('SignalName', '')
-            is_colony_ship = signal_name == 'System Colonisation Ship'
+            # Check both exact match and the formatted version
+            is_colony_ship = (signal_name == 'System Colonisation Ship' or 
+                             signal_name == '$EXT_PANEL_ColonisationShip:#index=1;')
         
         if not is_colony_ship:
             return False
@@ -68,7 +72,9 @@ def handle_colony_ship_event(message, event_type, DATABASE_URL):
         
         if event_type == 'Docked':
             # Extract Docked event specific fields
-            station_name = message.get('StationName')
+            raw_station_name = message.get('StationName')
+            # Standardize the station name
+            station_name = 'System Colonisation Ship' if raw_station_name == '$EXT_PANEL_ColonisationShip:#index=1;' else raw_station_name
             station_type = message.get('StationType')
             station_id = message.get('MarketID')
             station_faction = message.get('StationFaction')
@@ -80,7 +86,9 @@ def handle_colony_ship_event(message, event_type, DATABASE_URL):
             log_message("COLONY", f"✓ Docked at colony ship in {system_name or 'Unknown System'} (ID64: {system_id64})", level=1)
         elif event_type == 'FSSSignalDiscovered':
             # Extract FSSSignalDiscovered event specific fields
-            station_name = message.get('SignalName')
+            raw_signal_name = message.get('SignalName')
+            # Standardize the signal name
+            station_name = 'System Colonisation Ship' if raw_signal_name == '$EXT_PANEL_ColonisationShip:#index=1;' else raw_signal_name
             signal_type = message.get('SignalType')
             
             log_message("COLONY", f"✓ Discovered colony ship in {system_name or 'Unknown System'} (ID64: {system_id64})", level=1)
