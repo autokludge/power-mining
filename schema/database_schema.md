@@ -18,6 +18,8 @@
 | `primary_economy`   | `TEXT`                        | YES      |         | Primary economy type of the system.                               |
 | `secondary_economy` | `TEXT`                        | YES      |         | Secondary economy type of the system.                             |
 | `security`          | `TEXT`                        | YES      |         | Security level of the system.                                     |
+| `government`        | `TEXT`                        | YES      |         | Government type of the system.                                    |
+| `system_state`      | `TEXT`                        | YES      |         | Current state of the system (e.g., "Boom", "Civil War").          |
 | `last_updated`      | `TIMESTAMP WITHOUT TIME ZONE` | YES      |         | Timestamp of when the system data was last updated.               |
 
 **Constraints and Indexes:**
