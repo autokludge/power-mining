@@ -500,8 +500,8 @@ def transform_economy_data(economies_data):
             if name.startswith('$economy_'):
                 name = name[len('$economy_'):].rstrip(';')
                 
-            # Convert proportion to percentage
-            proportion = float(economy['Proportion']) * 100.0
+            # Convert proportion to percentage and round to 1 decimal place to avoid floating-point errors
+            proportion = round(float(economy['Proportion']) * 100, 1)
             
             # Add to result dictionary
             result[name] = proportion
