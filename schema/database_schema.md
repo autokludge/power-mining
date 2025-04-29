@@ -21,6 +21,9 @@
 | `government`        | `TEXT`                        | YES      |         | Government type of the system.                                    |
 | `system_state`      | `TEXT`                        | YES      |         | Current state of the system (e.g., "Boom", "Civil War").          |
 | `last_updated`      | `TIMESTAMP WITHOUT TIME ZONE` | YES      |         | Timestamp of when the system data was last updated.               |
+| `controlling_faction` | `TEXT`                      | YES      |         | Name of the controlling faction in the system.                    |
+| `active_states`     | `JSONB`                       | YES      |         | JSON array of active states for the controlling faction.          |
+| `all_factions`      | `JSONB`                       | YES      |         | JSON array of all factions in the system and their data.          |
 
 **Constraints and Indexes:**
 
@@ -31,6 +34,8 @@
   - `idx_systems_name` (btree on `(name)`)
   - `idx_systems_powers_acquiring` (GIN on `(powers_acquiring)`)
   - `idx_systems_last_updated` (btree on `(last_updated)`)
+  - `idx_systems_controlling_faction` (btree on `(controlling_faction)`)
+  - `idx_systems_active_states` (GIN on `(active_states)`)
 - **Foreign-Key References**:
   - Referenced by `mineral_signals(system_id64)`, `station_commodities(system_id64)`, and `stations(system_id64)`.
 

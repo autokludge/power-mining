@@ -19,7 +19,8 @@ from utils.update_functions import (
     handle_saa_signals,
     save_system_from_fsdjump,
     save_station_from_docked,
-    update_station_body_from_location
+    update_station_body_from_location,
+    handle_system_factions
 )
 from utils.update_log import log_message, format_tag, set_debug_level, ICONS, DEBUG_LEVEL, YELLOW, BLUE, MAGENTA, RED, CYAN, ORANGE, GREEN, RESET
 
@@ -520,11 +521,18 @@ def process_journal_message(message):
             handle_power_data(msg_data)
             # Process system state
             handle_system_state(msg_data)
+            # Process faction data (new)
+            handle_system_factions(msg_data, DATABASE_URL)
             return True
         # Process Location events with docked info to update station body
-        elif event_type == 'Location' and msg_data.get('Docked') == True:
-            # Update station body info if currently NULL
-            update_station_body_from_location(msg_data, DATABASE_URL)
+        elif event_type == 'Location':
+            # Process faction data (new)
+            handle_system_factions(msg_data, DATABASE_URL)
+            
+            # If docked, update station body info if currently NULL
+            if msg_data.get('Docked') == True:
+                update_station_body_from_location(msg_data, DATABASE_URL)
+            
             return True
         # Process colony ship events
         elif event_type == 'Docked' or event_type == 'FSSSignalDiscovered':

@@ -140,9 +140,12 @@ def save_colony_ship_to_db(DATABASE_URL, system_id64, station_name, station_id=N
             log_message("ERROR", "Missing required fields for colony ship database entry", level=1)
             return False
         
+        # Transform economies data to the new format if provided
+        transformed_economies = transform_economy_data(economies)
+        
         # Convert JSON fields to strings if they're not None
         station_faction_json = json.dumps(station_faction) if station_faction else None
-        economies_json = json.dumps(economies) if economies else None
+        economies_json = json.dumps(transformed_economies) if transformed_economies else (json.dumps(economies) if economies else None)
         landing_pads_json = json.dumps(landing_pads) if landing_pads else None
         
         # Start transaction
@@ -368,12 +371,34 @@ def save_system_from_fsdjump(message, DATABASE_URL, max_distance=2000.0):
     
     # Extract economy data
     primary_economy = message.get("SystemEconomy", "").replace("$economy_", "").replace(";", "")
+    # Convert "Agri" to "Agriculture"
+    if primary_economy == "Agri":
+        primary_economy = "Agriculture"
+        
     secondary_economy = message.get("SystemSecondEconomy", "").replace("$economy_", "").replace(";", "")
+    # Convert "Agri" to "Agriculture"
+    if secondary_economy == "Agri":
+        secondary_economy = "Agriculture"
     
     # Extract security and government - correctly formatted from Journal format
     security = message.get("SystemSecurity", "")
-    if security.startswith("$GALAXY_MAP_INFO_state_"):
+    
+    # Handle different security string formats
+    if security.startswith("$SYSTEM_SECURITY_"):
+        # Handle $SYSTEM_SECURITY_high/medium/low
+        security_level = security[len("$SYSTEM_SECURITY_"):].rstrip(";").lower()
+        # Capitalize the first letter
+        security = security_level[0].upper() + security_level[1:]
+    elif security.startswith("$GALAXY_MAP_INFO_state_"):
+        # Handle $GALAXY_MAP_INFO_state_anarchy
         security = security[len("$GALAXY_MAP_INFO_state_"):].rstrip(";")
+        # Capitalize the first letter
+        security = security[0].upper() + security[1:]
+    elif security.startswith("$GAlAXY_MAP_INFO_state_"):  # Handle with lowercase "l"
+        # Handle variant with lowercase "l" in $GAlAXY_MAP_INFO_state_anarchy
+        security = security[len("$GAlAXY_MAP_INFO_state_"):].rstrip(";")
+        # Capitalize the first letter
+        security = security[0].upper() + security[1:]
     
     government = message.get("SystemGovernment", "")
     if government.startswith("$government_"):
@@ -443,6 +468,50 @@ def save_system_from_fsdjump(message, DATABASE_URL, max_distance=2000.0):
         log_message("ERROR", f"Traceback: {traceback.format_exc()}", level=1)
         return False
 
+def transform_economy_data(economies_data):
+    """Transform StationEconomies data from the raw game format to a simplified JSON object
+    
+    Converts from:
+    [
+        {"Name": "$economy_Extraction;", "Proportion": 0.23},
+        {"Name": "$economy_Industrial;", "Proportion": 0.77}
+    ]
+    
+    To:
+    {"Extraction": 23.0, "Industrial": 77.0}
+    
+    Args:
+        economies_data (list): List of economy dictionaries from EDDN
+        
+    Returns:
+        dict: Simplified economy dictionary or None if conversion failed
+    """
+    if not economies_data or not isinstance(economies_data, list):
+        return None
+        
+    try:
+        result = {}
+        for economy in economies_data:
+            if not isinstance(economy, dict) or 'Name' not in economy or 'Proportion' not in economy:
+                continue
+                
+            # Extract economy name from the format "$economy_Industrial;"
+            name = economy['Name']
+            if name.startswith('$economy_'):
+                name = name[len('$economy_'):].rstrip(';')
+                
+            # Convert proportion to percentage
+            proportion = float(economy['Proportion']) * 100.0
+            
+            # Add to result dictionary
+            result[name] = proportion
+            
+        return result if result else None
+        
+    except Exception as e:
+        log_message("ERROR", f"Error transforming economy data: {str(e)}", level=1)
+        return None
+
 def save_station_from_docked(message, DATABASE_URL):
     """
     Save station data from a Docked event
@@ -497,9 +566,12 @@ def save_station_from_docked(message, DATABASE_URL):
         elif landing_pads.get("Small", 0) > 0:
             landing_pad_size = "Small"
     
-    # Extract economies data
+    # Extract economies data and transform it
     economies = message.get("StationEconomies")
-    economies_json = json.dumps(economies) if economies else None
+    transformed_economies = transform_economy_data(economies)
+    
+    # Convert to JSON string for database
+    economies_json = json.dumps(transformed_economies) if transformed_economies else json.dumps(economies)
     
     # Get current timestamp
     from datetime import datetime, timezone
@@ -532,8 +604,10 @@ def save_station_from_docked(message, DATABASE_URL):
             station_result = cursor.fetchone()
             
             if station_result:
-                # Station already exists, nothing to do
-                log_message("STATION", f"Station {station_name} (ID: {market_id}) already exists in the database", level=2)
+                # Station already exists, update economies and return
+                cursor.execute("UPDATE stations SET economies = %s::jsonb WHERE system_id64 = %s AND station_id = %s", 
+                             (economies_json, system_id64, market_id))
+                log_message("STATION", f"Updated economies for station {station_name}", level=2)
                 return True
             
             # Insert new station
@@ -630,4 +704,102 @@ def update_station_body_from_location(message, DATABASE_URL):
             
     except Exception as e:
         log_message("ERROR", f"Database error updating station body: {str(e)}", level=1)
+        return False
+
+def handle_system_factions(message, DATABASE_URL):
+    """Process faction data from FSDJump and Location events
+    
+    Args:
+        message (dict): FSDJump or Location event data
+        DATABASE_URL (str): Database connection string
+        
+    Returns:
+        bool: True if factions were processed, False otherwise
+    """
+    try:
+        # Only process FSDJump or Location events
+        event = message.get("event", "")
+        if event not in ["FSDJump", "Location"]:
+            return False
+
+        # Extract required fields
+        system_name = message.get("StarSystem", "")
+        system_id64 = message.get("SystemAddress")
+        
+        if not system_name or not system_id64:
+            log_message("FACTION", f"Missing system info in {event} event - Name: {system_name}, ID64: {system_id64}", level=2)
+            return False
+            
+        # Extract system faction (controlling faction)
+        system_faction_data = message.get("SystemFaction")
+        if not system_faction_data or not isinstance(system_faction_data, dict):
+            log_message("FACTION", f"No SystemFaction data in {event} event for system {system_name}", level=2)
+            return False
+            
+        controlling_faction = system_faction_data.get("Name")
+        if not controlling_faction:
+            log_message("FACTION", f"No controlling faction name in {event} event for system {system_name}", level=2)
+            return False
+            
+        log_message("FACTION", f"Processing factions for {system_name} (Controlling: {controlling_faction})", level=2)
+            
+        # Get all factions data
+        factions = message.get("Factions", [])
+        if not factions:
+            log_message("FACTION", f"No Factions data in {event} event for system {system_name}", level=2)
+            return False
+            
+        # Store entire factions array as JSONB
+        all_factions_json = json.dumps(factions)
+            
+        # Find active states for controlling faction
+        active_states = []
+        for faction in factions:
+            if faction.get("Name") == controlling_faction:
+                faction_states = faction.get("ActiveStates", [])
+                for state in faction_states:
+                    if isinstance(state, dict) and "State" in state:
+                        active_states.append(state["State"])
+                break
+                
+        log_message("FACTION", f"Active states for {controlling_faction}: {active_states}", level=2)
+        
+        # Convert active states to JSONB
+        active_states_json = json.dumps(active_states)
+            
+        # Get current timestamp
+        current_timestamp = datetime.now()
+            
+        # Update database with faction data
+        try:
+            with psycopg2.connect(DATABASE_URL) as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute("""
+                    UPDATE systems
+                    SET controlling_faction = %s,
+                        active_states = %s::jsonb,
+                        all_factions = %s::jsonb,
+                        last_updated = %s
+                    WHERE id64 = %s
+                    RETURNING id64
+                """, (controlling_faction, active_states_json, all_factions_json, current_timestamp, system_id64))
+                
+                if cursor.rowcount > 0:
+                    log_message("FACTION", f"✓ Updated faction data for {system_name} from {event} event: controlling={controlling_faction}, states={active_states}", level=1)
+                    return True
+                else:
+                    log_message("FACTION", f"System {system_name} not found in database", level=2)
+                    return False
+                    
+        except Exception as e:
+            log_message("ERROR", f"Database error updating faction data: {str(e)}", level=1)
+            import traceback
+            log_message("ERROR", f"Traceback: {traceback.format_exc()}", level=1)
+            return False
+            
+    except Exception as e:
+        log_message("ERROR", f"Error processing faction data: {str(e)}", level=1)
+        import traceback
+        log_message("ERROR", f"Traceback: {traceback.format_exc()}", level=1)
         return False
