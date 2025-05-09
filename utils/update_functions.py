@@ -2,6 +2,7 @@ import json
 import psycopg2
 from datetime import datetime
 from utils.update_log import log_message
+from utils.update_powers import update_power_history
 
 # ANSI color codes for consistent styling
 YELLOW = '\033[93m'  # Default/Colony Ship color
@@ -468,6 +469,21 @@ def save_system_from_fsdjump(message, DATABASE_URL, max_distance=2000.0):
                 primary_economy, secondary_economy, security,
                 government, current_timestamp
             ))
+            
+            # Update power history if we have any Powerplay data
+            if controlling_power or powers or control_progress is not None or power_reinforcement is not None or power_undermining is not None:
+                
+                # Update power history with the same transaction
+                update_power_history(
+                    conn=conn,
+                    system_id64=system_id64,
+                    system_name=system_name,
+                    controlling_power=controlling_power,
+                    powers=powers,
+                    control_progress=control_progress,
+                    power_reinforcement=power_reinforcement,
+                    power_undermining=power_undermining
+                )
             
             result = cursor.fetchone()
             if result:
