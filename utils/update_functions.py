@@ -369,6 +369,15 @@ def save_system_from_fsdjump(message, DATABASE_URL, max_distance=2000.0):
     power_state = message.get("PowerplayState")
     powers = message.get("Powers", [])
     
+    # Extract Powerplay 2.0 metrics - NEW
+    control_progress = message.get("PowerplayStateControlProgress")
+    power_reinforcement = message.get("PowerplayStateReinforcement")
+    power_undermining = message.get("PowerplayStateUndermining")
+    
+    # Log powerplay metrics if they exist
+    if any([control_progress is not None, power_reinforcement is not None, power_undermining is not None]):
+        log_message("POWER", f"Powerplay metrics for {system_name}: Progress={control_progress}, Reinforcement={power_reinforcement}, Undermining={power_undermining}", level=2)
+    
     # Extract economy data
     primary_economy = message.get("SystemEconomy", "").replace("$economy_", "").replace(";", "")
     # Convert "Agri" to "Agriculture"
@@ -424,11 +433,13 @@ def save_system_from_fsdjump(message, DATABASE_URL, max_distance=2000.0):
                 INSERT INTO systems (
                     id64, name, x, y, z, distance_from_sol, 
                     controlling_power, power_state, powers_acquiring,
+                    control_progress, power_reinforcement, power_undermining,
                     primary_economy, secondary_economy, security, 
                     government, last_updated
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s, 
                     %s, %s, %s::jsonb,
+                    %s, %s, %s,
                     %s, %s, %s,
                     %s, %s
                 )
@@ -441,6 +452,9 @@ def save_system_from_fsdjump(message, DATABASE_URL, max_distance=2000.0):
                     controlling_power = COALESCE(EXCLUDED.controlling_power, systems.controlling_power),
                     power_state = COALESCE(EXCLUDED.power_state, systems.power_state),
                     powers_acquiring = EXCLUDED.powers_acquiring,
+                    control_progress = EXCLUDED.control_progress,
+                    power_reinforcement = EXCLUDED.power_reinforcement,
+                    power_undermining = EXCLUDED.power_undermining,
                     primary_economy = COALESCE(EXCLUDED.primary_economy, systems.primary_economy),
                     secondary_economy = COALESCE(EXCLUDED.secondary_economy, systems.secondary_economy),
                     security = COALESCE(EXCLUDED.security, systems.security),
@@ -450,6 +464,7 @@ def save_system_from_fsdjump(message, DATABASE_URL, max_distance=2000.0):
             """, (
                 system_id64, system_name, x, y, z, distance_from_sol,
                 controlling_power, power_state, json.dumps(powers),
+                control_progress, power_reinforcement, power_undermining, 
                 primary_economy, secondary_economy, security,
                 government, current_timestamp
             ))
