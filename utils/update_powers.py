@@ -58,7 +58,7 @@ def update_power_history(conn, system_id64, system_name, controlling_power, powe
         # Calculate trend: find the most recent record for this system
         trend = 0.0
         cursor.execute("""
-            SELECT control_progress
+            SELECT control_progress, timestamp, power_reinforcement, power_undermining
             FROM power_history
             WHERE system_id64 = %s
             ORDER BY timestamp DESC
@@ -66,42 +66,41 @@ def update_power_history(conn, system_id64, system_name, controlling_power, powe
         """, (system_id64,))
         
         prev_record = cursor.fetchone()
-        if prev_record and prev_record[0] is not None and control_progress is not None:
-            # Calculate change from previous value
-            trend = control_progress - prev_record[0]
-            log_message("POWER", f"Trend for {system_name}: {trend:+.6f} (from {prev_record[0]:.6f} to {control_progress:.6f})", level=2)
         
         # Check if we should add a new record (prevent too frequent updates)
         should_update = True
-        cursor.execute("""
-            SELECT timestamp
-            FROM power_history
-            WHERE system_id64 = %s
-            ORDER BY timestamp DESC
-            LIMIT 1
-        """, (system_id64,))
         
-        last_update = cursor.fetchone()
-        if last_update:
-            # Calculate hours since last update
-            hours_diff = (current_time - last_update[0]).total_seconds() / 3600
+        if prev_record:
+            # Calculate trend if we have previous data
+            if prev_record[0] is not None and control_progress is not None:
+                trend = control_progress - prev_record[0]
+                log_message("POWER", f"Trend for {system_name}: {trend:+.6f} (from {prev_record[0]:.6f} to {control_progress:.6f})", level=2)
             
-            # Skip if less than 1 hour has passed AND the values haven't changed significantly
-            if hours_diff < 1.0:
-                # Check if there's been a significant change in control_progress
-                cursor.execute("""
-                    SELECT control_progress, power_reinforcement, power_undermining
-                    FROM power_history
-                    WHERE system_id64 = %s
-                    ORDER BY timestamp DESC
-                    LIMIT 1
-                """, (system_id64,))
-                
-                last_values = cursor.fetchone()
-                # Only skip if the values are similar
-                if last_values and abs(trend) < 0.01:
-                    should_update = False
-                    log_message("POWER", f"Skipping {system_name} update - less than 1 hour and no significant change", level=3)
+            # Get the last update timestamp
+            last_update_time = prev_record[1]
+            
+            # Calculate hours since last update
+            hours_diff = (current_time - last_update_time).total_seconds() / 3600
+            
+            # Get previous values for comparison
+            prev_control_progress = prev_record[0]
+            prev_reinforcement = prev_record[2]
+            prev_undermining = prev_record[3]
+            
+            # Determine if there's been a significant change
+            significant_change = (
+                # Control progress has changed by more than 1%
+                (control_progress is not None and prev_control_progress is not None and abs(control_progress - prev_control_progress) > 0.01) or
+                # Reinforcement value has changed
+                (power_reinforcement is not None and prev_reinforcement is not None and power_reinforcement != prev_reinforcement) or
+                # Undermining value has changed
+                (power_undermining is not None and prev_undermining is not None and power_undermining != prev_undermining)
+            )
+            
+            # Skip if less than 1 hour has passed AND there's no significant change
+            if hours_diff < 1.0 and not significant_change:
+                should_update = False
+                log_message("POWER", f"Skipping {system_name} update - {hours_diff:.2f} hours since last update and no significant change", level=2)
         
         # Insert new record if needed
         if should_update:
@@ -131,6 +130,8 @@ def update_power_history(conn, system_id64, system_name, controlling_power, powe
             
             log_message("POWER", f"Added power history record for {system_name} - Trend: {trend:+.6f}", level=2)
             return True
+        else:
+            log_message("POWER", f"Skipped update for {system_name} (throttled)", level=3)
             
         return False
         
