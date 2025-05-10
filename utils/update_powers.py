@@ -58,7 +58,7 @@ def update_power_history(conn, system_id64, system_name, controlling_power, powe
         # Calculate trend: find the most recent record for this system
         trend = 0.0
         cursor.execute("""
-            SELECT control_progress, timestamp, power_reinforcement, power_undermining, state_percent
+            SELECT control_progress, timestamp, power_reinforcement, power_undermining, state_percent, control_points
             FROM power_history
             WHERE system_id64 = %s
             ORDER BY timestamp DESC
@@ -129,6 +129,12 @@ def update_power_history(conn, system_id64, system_name, controlling_power, powe
         trend_percent = None
         if state_percent is not None and prev_record and prev_record[4] is not None:
             trend_percent = round(state_percent - prev_record[4], 2)
+            
+        # Calculate cp_delta from previous control_points
+        cp_delta = None
+        if control_points is not None and prev_record and prev_record[5] is not None:
+            cp_delta = control_points - prev_record[5]
+            log_message("POWER", f"CP delta for {system_name}: {cp_delta:+} (from {prev_record[5]} to {control_points})", level=3)
         
         if prev_record:
             # Calculate trend if we have previous data
@@ -182,10 +188,11 @@ def update_power_history(conn, system_id64, system_name, controlling_power, powe
                     power_reinforcement, 
                     power_undermining,
                     control_points,
+                    cp_delta,
                     state_percent,
                     trend_percent
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
             """, (
                 current_time,
@@ -197,6 +204,7 @@ def update_power_history(conn, system_id64, system_name, controlling_power, powe
                 power_reinforcement,
                 power_undermining,
                 control_points,
+                cp_delta,
                 state_percent,
                 trend_percent
             ))
@@ -209,7 +217,8 @@ def update_power_history(conn, system_id64, system_name, controlling_power, powe
                     state_info += f" ({trend_percent:+.2f}%)"
                     
             cp_info = f", CP: {control_points}" if control_points is not None else ""
-            log_message("POWER", f"Added power history for {system_name} - Trend: {trend:+.3f}{state_info}{cp_info}", level=2)
+            cp_delta_info = f" ({cp_delta:+})" if cp_delta is not None else ""
+            log_message("POWER", f"Added power history for {system_name} - Trend: {trend:+.3f}{state_info}{cp_info}{cp_delta_info}", level=2)
             return True
         else:
             log_message("POWER", f"Skipped update for {system_name} (throttled)", level=3)
