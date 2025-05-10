@@ -167,8 +167,15 @@ def update_power_history(conn, system_id64, system_name, controlling_power, powe
                 (power_undermining is not None and prev_undermining is not None and power_undermining != prev_undermining)
             )
             
-            # Skip if less than 1 hour has passed AND there's no significant change
-            if hours_diff < 1.0 and not significant_change:
+            # Always update if it's been at least an hour or if there's a significant change
+            if hours_diff >= 1.0 or significant_change:
+                should_update = True
+                if significant_change:
+                    log_message("POWER", f"Updating {system_name} - significant change detected", level=2)
+                else:
+                    log_message("POWER", f"Updating {system_name} - {hours_diff:.2f} hours since last update", level=2)
+            else:
+                # Skip if less than 1 hour has passed AND there's no significant change
                 should_update = False
                 log_message("POWER", f"Skipping {system_name} update - {hours_diff:.2f} hours since last update and no significant change", level=2)
         
