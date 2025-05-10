@@ -58,7 +58,7 @@ def update_power_history(conn, system_id64, system_name, controlling_power, powe
         # Calculate trend: find the most recent record for this system
         trend = 0.0
         cursor.execute("""
-            SELECT control_progress, timestamp, power_reinforcement, power_undermining
+            SELECT control_progress, timestamp, power_reinforcement, power_undermining, state_percent
             FROM power_history
             WHERE system_id64 = %s
             ORDER BY timestamp DESC
@@ -70,11 +70,75 @@ def update_power_history(conn, system_id64, system_name, controlling_power, powe
         # Check if we should add a new record (prevent too frequent updates)
         should_update = True
         
+        # Calculate control points properly
+        control_points = None
+        
+        # Method 1: Direct calculation if we have reinforcement and undermining values
+        if power_reinforcement is not None and power_undermining is not None:
+            control_points = power_reinforcement - power_undermining
+            log_message("POWER", f"Control points calculated from R-U: {control_points}", level=3)
+        
+        # Method 2: Calculate from control_progress if available
+        elif control_progress is not None:
+            if control_progress < 0:
+                # Negative progress means undermining
+                control_points = int(control_progress * 120000)
+                log_message("POWER", f"Control points calculated from negative progress: {control_points}", level=3)
+            else:
+                # Determine which band we're in based on control_progress value
+                if control_progress < 1.0:
+                    # Likely in Acquisition/contested phase (less than 100% Exploited)
+                    control_points = int(control_progress * 120000)
+                    log_message("POWER", f"Control points calculated from Acquisition progress: {control_points}", level=3)
+                elif control_progress < 2.0:
+                    # Likely in Exploited phase (100%-200% progress)
+                    adjusted_progress = control_progress - 1.0  # Normalize to 0-1 range
+                    control_points = 120000 + int(adjusted_progress * 333333)
+                    log_message("POWER", f"Control points calculated from Exploited progress: {control_points}", level=3)
+                elif control_progress < 3.0:
+                    # Likely in Fortified phase (200%-300% progress)
+                    adjusted_progress = control_progress - 2.0  # Normalize to 0-1 range
+                    control_points = 453333 + int(adjusted_progress * 666667)
+                    log_message("POWER", f"Control points calculated from Fortified progress: {control_points}", level=3)
+                else:
+                    # Likely in Stronghold phase (300%+ progress)
+                    adjusted_progress = control_progress - 3.0  # Normalize to 0-1 range
+                    control_points = 1120000 + int(adjusted_progress * 1000000)
+                    log_message("POWER", f"Control points calculated from Stronghold progress: {control_points}", level=3)
+        
+        # Calculate state_percent based on control points
+        state_percent = None
+        if control_points is not None:
+            if control_points < 0:
+                # Undermined (negative control points)
+                state_percent = round((control_points / 120000.0) * 100, 2)
+            elif control_points < 120000:
+                # Acquisition phase (0 to 119,999)
+                state_percent = round((control_points / 120000.0) * 100, 2)
+            elif control_points < 453333:
+                # Exploited (120,000 to 453,332)
+                state_percent = round(((control_points - 120000) / 333333.0) * 100, 2)
+            elif control_points < 1120000:
+                # Fortified (453,333 to 1,119,999)
+                state_percent = round(((control_points - 453333) / 666667.0) * 100, 2)
+            else:
+                # Stronghold (1,120,000+)
+                state_percent = round(((control_points - 1120000) / 1000000.0) * 100, 2)
+        
+        # Calculate trend_percent from previous state_percent
+        trend_percent = None
+        if state_percent is not None and prev_record and prev_record[4] is not None:
+            trend_percent = round(state_percent - prev_record[4], 2)
+        
         if prev_record:
             # Calculate trend if we have previous data
             if prev_record[0] is not None and control_progress is not None:
-                trend = control_progress - prev_record[0]
-                log_message("POWER", f"Trend for {system_name}: {trend:+.6f} (from {prev_record[0]:.6f} to {control_progress:.6f})", level=2)
+                # Calculate and round the trend to 3 decimal places
+                raw_trend = control_progress - prev_record[0]
+                trend = round(raw_trend, 3)  # Round to 3 decimal places
+                
+                # Use the rounded trend value for logging
+                log_message("POWER", f"Trend for {system_name}: {trend:+.3f} (from {prev_record[0]:.3f} to {control_progress:.3f})", level=2)
             
             # Get the last update timestamp
             last_update_time = prev_record[1]
@@ -104,6 +168,9 @@ def update_power_history(conn, system_id64, system_name, controlling_power, powe
         
         # Insert new record if needed
         if should_update:
+            # Round control_progress to 3 decimal places for better display
+            rounded_control_progress = round(control_progress, 3) if control_progress is not None else None
+            
             cursor.execute("""
                 INSERT INTO power_history (
                     timestamp, 
@@ -113,22 +180,36 @@ def update_power_history(conn, system_id64, system_name, controlling_power, powe
                     control_progress, 
                     trend,
                     power_reinforcement, 
-                    power_undermining
+                    power_undermining,
+                    control_points,
+                    state_percent,
+                    trend_percent
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
             """, (
                 current_time,
                 system_id64,
                 power_id,
                 powers_acquiring if powers_acquiring else None,
-                control_progress,
-                trend,
+                rounded_control_progress,  # Use the rounded value
+                trend,  # Already rounded above
                 power_reinforcement,
-                power_undermining
+                power_undermining,
+                control_points,
+                state_percent,
+                trend_percent
             ))
             
-            log_message("POWER", f"Added power history record for {system_name} - Trend: {trend:+.6f}", level=2)
+            # Log the record with new values
+            state_info = ""
+            if state_percent is not None:
+                state_info = f", State: {state_percent:.2f}%"
+                if trend_percent is not None:
+                    state_info += f" ({trend_percent:+.2f}%)"
+                    
+            cp_info = f", CP: {control_points}" if control_points is not None else ""
+            log_message("POWER", f"Added power history for {system_name} - Trend: {trend:+.3f}{state_info}{cp_info}", level=2)
             return True
         else:
             log_message("POWER", f"Skipped update for {system_name} (throttled)", level=3)
