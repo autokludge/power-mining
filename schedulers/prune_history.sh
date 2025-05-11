@@ -1,9 +1,26 @@
 #!/bin/bash
 
-echo "[prune_history] Started at $(date)"
+LOGFILE="/code/logs/prune.log"
+mkdir -p /code/logs
+
+if touch "$LOGFILE" && [ -w "$LOGFILE" ]; then
+  CAN_LOG=1
+else
+  CAN_LOG=0
+fi
+
+log() {
+  if [ "$CAN_LOG" -eq 1 ]; then
+    echo "$1" >> "$LOGFILE"
+  else
+    echo "$1"
+  fi
+}
+
+log "[prune_runner] Started at $(date)"
 
 while true; do
-  echo "[prune_history] Running prune_power_history.sh at $(date)"
-  sh /code/utils/prune_power_history.sh >> /code/logs/prune.log 2>&1
-  sleep 86400  # 24 hours
+  log "[prune_runner] Running prune_power_history.sh at $(date)"
+  sh /code/utils/prune_power_history.sh 2>&1 | while read -r line; do log "[prune_runner] $line"; done
+  sleep 86400
 done
