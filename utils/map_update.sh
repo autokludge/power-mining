@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # Change to the application directory
-cd /home/app/powermining/code || { echo "Failed to change directory" > /home/app/powermining/code/logs/map_update.log; exit 1; }
+cd /code || { echo "Failed to change directory" > /code/logs/map_update.log; exit 1; }
 
 # Define logs directory with absolute path
-LOGS_DIR="/home/app/powermining/code/logs"
+LOGS_DIR="/code/logs"
 
 # Add timestamp to beginning of log
 echo "========================================" >> ${LOGS_DIR}/map_update.log
