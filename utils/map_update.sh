@@ -6,7 +6,7 @@ pwd
 cd /code || { echo "Failed to change directory" > /code/logs/map_update.log; exit 1; }
 
 # Define logs directory with absolute path
-LOGS_DIR="../logs"
+LOGS_DIR="logs"
 
 # Add timestamp to beginning of log
 echo "========================================" >> ${LOGS_DIR}/map_update.log

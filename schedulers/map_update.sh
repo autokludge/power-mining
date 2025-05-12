@@ -1,8 +1,8 @@
 #!/bin/bash
 
 pwd
-LOGFILE="../logs/map.log"
-mkdir -p /code/logs
+LOGFILE="logs/map.log"
+# mkdir -p /code/logs
 
 # Try to open log file manually
 if touch "$LOGFILE" && [ -w "$LOGFILE" ]; then

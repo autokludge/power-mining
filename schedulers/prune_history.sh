@@ -1,7 +1,7 @@
 #!/bin/bash
 
 pwd
-LOGFILE="../logs/map.log"
+LOGFILE="logs/map.log"
 #mkdir -p /code/logs
 
 if touch "$LOGFILE" && [ -w "$LOGFILE" ]; then
