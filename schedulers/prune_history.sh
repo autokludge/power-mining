@@ -1,7 +1,8 @@
 #!/bin/bash
 
-LOGFILE="/logs/map.log"
-mkdir -p /code/logs
+pwd
+LOGFILE="../logs/map.log"
+#mkdir -p /code/logs
 
 if touch "$LOGFILE" && [ -w "$LOGFILE" ]; then
   CAN_LOG=1
