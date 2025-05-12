@@ -4,7 +4,7 @@
 cd /code || { echo "Failed to change directory" > /code/logs/prune_history.log; exit 1; }
 
 # Define logs directory with absolute path
-LOGS_DIR="/code/logs"
+LOGS_DIR="/logs"
 
 # Add timestamp to beginning of log
 echo "========================================" >> ${LOGS_DIR}/prune_history.log

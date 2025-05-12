@@ -1,6 +1,6 @@
 #!/bin/bash
 
-LOGFILE="/code/logs/prune.log"
+LOGFILE="/logs/map.log"
 mkdir -p /code/logs
 
 if touch "$LOGFILE" && [ -w "$LOGFILE" ]; then

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-LOGFILE="/code/logs/map.log"
+LOGFILE="/logs/map.log"
 mkdir -p /code/logs
 
 # Try to open log file manually
