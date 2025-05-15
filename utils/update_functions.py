@@ -379,6 +379,9 @@ def save_system_from_fsdjump(message, DATABASE_URL, max_distance=2000.0):
     if any([control_progress is not None, power_reinforcement is not None, power_undermining is not None]):
         log_message("POWER", f"Powerplay metrics for {system_name}: Progress={control_progress}, Reinforcement={power_reinforcement}, Undermining={power_undermining}", level=2)
     
+    # DEBUG: Log the exact power data before updating either table
+    log_message("POWER", f"save_system_from_fsdjump - Updating system={system_name}: control_progress={control_progress}, power_reinforcement={power_reinforcement}, power_undermining={power_undermining}", level=1)
+
     # Extract economy data
     primary_economy = message.get("SystemEconomy", "").replace("$economy_", "").replace(";", "")
     # Convert "Agri" to "Agriculture"
@@ -472,6 +475,8 @@ def save_system_from_fsdjump(message, DATABASE_URL, max_distance=2000.0):
             
             # Update power history if we have any Powerplay data
             if controlling_power or powers or control_progress is not None or power_reinforcement is not None or power_undermining is not None:
+                # DEBUG: Log the exact power data before calling update_power_history
+                log_message("POWER", f"Calling update_power_history for {system_name} with control_progress={control_progress}, power_reinforcement={power_reinforcement}, power_undermining={power_undermining}", level=1)
                 
                 # Update power history with the same transaction
                 update_power_history(

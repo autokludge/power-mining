@@ -29,6 +29,9 @@ def update_power_history(conn, system_id64, system_name, controlling_power, powe
     # Current timestamp
     current_time = datetime.now(timezone.utc)
     
+    # DEBUG: Log incoming power data to track consistency between tables
+    log_message("POWER", f"update_power_history received: system={system_name}, control_progress={control_progress}, power_reinforcement={power_reinforcement}, power_undermining={power_undermining}", level=1)
+    
     try:
         cursor = conn.cursor()
         
@@ -157,7 +160,8 @@ def update_power_history(conn, system_id64, system_name, controlling_power, powe
             prev_reinforcement = prev_record[2]
             prev_undermining = prev_record[3]
             
-            # Determine if there's been a significant change
+            # Determine if there's been a significant change - DISABLED but kept for reference
+            """
             significant_change = (
                 # Control progress has changed by more than 1%
                 (control_progress is not None and prev_control_progress is not None and abs(control_progress - prev_control_progress) > 0.01) or
@@ -166,6 +170,9 @@ def update_power_history(conn, system_id64, system_name, controlling_power, powe
                 # Undermining value has changed
                 (power_undermining is not None and prev_undermining is not None and power_undermining != prev_undermining)
             )
+            """
+            # Override: Always consider it a significant change (disabling the check)
+            significant_change = True
             
             # Always update if it's been at least an hour or if there's a significant change
             if hours_diff >= 1.0 or significant_change:
@@ -176,8 +183,9 @@ def update_power_history(conn, system_id64, system_name, controlling_power, powe
                     log_message("POWER", f"Updating {system_name} - {hours_diff:.2f} hours since last update", level=2)
             else:
                 # Skip if less than 1 hour has passed AND there's no significant change
+                # This should never happen now that significant_change is always True
                 should_update = False
-                log_message("POWER", f"Skipping {system_name} update - {hours_diff:.2f} hours since last update and no significant change", level=2)
+                log_message("POWER", f"Skipping {system_name} update - {hours_diff:.2f} hours since last update", level=2)
         
         # Insert new record if needed
         if should_update:

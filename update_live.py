@@ -23,6 +23,7 @@ from utils.update_functions import (
     handle_system_factions
 )
 from utils.update_log import log_message, format_tag, set_debug_level, ICONS, DEBUG_LEVEL, YELLOW, BLUE, MAGENTA, RED, CYAN, ORANGE, GREEN, RESET
+from utils.update_powers import update_power_history
 
 # Constants
 DATABASE_URL = None  # Will be set from args or env in main()
@@ -310,6 +311,14 @@ def handle_power_data(message):
         log_message("POWER", MAGENTA + f"Missing system info - Name: {system_name}, ID64: {system_id64}", level=2)
         return
 
+    # Extract Powerplay 2.0 metrics - DEBUG ADDED
+    control_progress = message.get("PowerplayStateControlProgress")
+    power_reinforcement = message.get("PowerplayStateReinforcement")
+    power_undermining = message.get("PowerplayStateUndermining")
+    
+    # DEBUG: Log power data to track discrepancies
+    log_message("POWER", MAGENTA + f"handle_power_data received for {system_name}: control_progress={control_progress}, power_reinforcement={power_reinforcement}, power_undermining={power_undermining}", level=1)
+
     # Get current values from database first
     try:
         with psycopg2.connect(DATABASE_URL) as conn:
@@ -357,6 +366,9 @@ def handle_power_data(message):
             log_message("POWER", MAGENTA + f"  Controlling Power: {controlling_power} {'(from message)' if has_controlling_power else '(unchanged)'}", level=2)
             log_message("POWER", MAGENTA + f"  Power State: {power_state} {'(from message)' if has_power_state else '(unchanged)'}", level=2)
             log_message("POWER", MAGENTA + f"  Powers Acquiring: {powers} {'(from message)' if has_powers else '(unchanged)'}", level=2)
+            log_message("POWER", MAGENTA + f"  Control Progress: {control_progress}", level=2)
+            log_message("POWER", MAGENTA + f"  Power Reinforcement: {power_reinforcement}", level=2)
+            log_message("POWER", MAGENTA + f"  Power Undermining: {power_undermining}", level=2)
 
             # Check if there are actual changes, considering NULL values
             power_changed = has_controlling_power and current_power != controlling_power and not (current_power is None and controlling_power is None)
@@ -384,6 +396,23 @@ def handle_power_data(message):
                 update_fields.append("powers_acquiring = %s::jsonb")
                 params.append(json.dumps(powers))
                 
+            # Always update power metrics if present
+            if control_progress is not None:
+                update_fields.append("control_progress = %s")
+                params.append(control_progress)
+                
+            if power_reinforcement is not None:
+                update_fields.append("power_reinforcement = %s")
+                params.append(power_reinforcement)
+                
+            if power_undermining is not None:
+                update_fields.append("power_undermining = %s")
+                params.append(power_undermining)
+                
+            # DEBUG: Log the SQL update that will be done
+            log_message("POWER", MAGENTA + f"SQL update fields: {update_fields}", level=2)
+            log_message("POWER", MAGENTA + f"SQL parameters: {params}", level=2)
+            
             # Always update the system record with latest timestamp
             query = f"""
                 UPDATE systems 
@@ -406,6 +435,20 @@ def handle_power_data(message):
                 # Log the timestamp update
                 if updated_timestamp:
                     log_message("POWER", MAGENTA + f"System {system_name} last_updated timestamp set to: {updated_timestamp}", level=2)
+                
+                # Update power history with the same transaction
+                if controlling_power is not None or powers or control_progress is not None or power_reinforcement is not None or power_undermining is not None:
+                    log_message("POWER", MAGENTA + f"Calling update_power_history from handle_power_data", level=2)
+                    update_power_history(
+                        conn=conn,
+                        system_id64=system_id64,
+                        system_name=system_name,
+                        controlling_power=controlling_power,
+                        powers=powers,
+                        control_progress=control_progress,
+                        power_reinforcement=power_reinforcement,
+                        power_undermining=power_undermining
+                    )
                 
                 conn.commit()
             else:
