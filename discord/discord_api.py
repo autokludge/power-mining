@@ -108,7 +108,7 @@ def get_discord_system(system_identifier):
             LEFT JOIN mineral_signals ms ON s.id64 = ms.system_id64
             WHERE {where_clause}
             GROUP BY s.id64, s.name, s.x, s.y, s.z, s.controlling_power, s.power_state, s.powers_acquiring, s.distance_from_sol, s.system_state, s.population
-        """, (system_identifier, system_identifier))
+        """, (system_identifier, system_identifier, system_identifier))
         
         result = cur.fetchone()
         if not result:
@@ -144,7 +144,7 @@ def get_discord_system(system_identifier):
             cur.close()
         if 'conn' in locals():
             conn.close()
-        print(f"Error in get_discord_system: {str(e)}")
+        print(f"Error in get_system_by_identifier: {str(e)}")
         print(f"System identifier: {system_identifier}")
         import traceback
         print("Full traceback:")
@@ -419,3 +419,4 @@ def find_acquisition_systems(conn, x: float, y: float, z: float, power: str) -> 
         'strongholds': strongholds,
         'acquisition': acquisition_systems
     }
+
