@@ -569,8 +569,17 @@ def process_journal_message(message):
             return True
         # Process Location events with docked info to update station body
         elif event_type == 'Location':
+            # First save/update the system data (same as with FSDJump)
+            save_system_from_fsdjump(msg_data, DATABASE_URL, max_distance=2000.0)
+            
             # Process faction data (new)
             handle_system_factions(msg_data, DATABASE_URL)
+            
+            # Process power data from Location events too
+            handle_power_data(msg_data)
+            
+            # Process system state
+            handle_system_state(msg_data)
             
             # If docked, update station body info if currently NULL
             if msg_data.get('Docked') == True:
