@@ -22,6 +22,7 @@ from utils.res_data import (
 from utils.map import map_bp
 from utils.search_acquisition import search as search_acquisition
 from utils.search_undermine import search as search_undermine
+from discord.discord_api import discord_api_bp  # Import the Discord API blueprint
 
 # Custom JSON encoder to handle datetime objects
 class CustomJSONEncoder(JSONEncoder):
@@ -474,6 +475,7 @@ atexit.register(cleanup_zmq)
 app.config['DATABASE_URL'] = DATABASE_URL
 
 app.register_blueprint(map_bp)
+app.register_blueprint(discord_api_bp)
 
 @app.route('/map')
 def show_map():

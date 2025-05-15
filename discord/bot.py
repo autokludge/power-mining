@@ -43,10 +43,10 @@ if platform.system() == 'Windows':
 from discord.ui import View, Button
 
 # Constants for API endpoints
-API_BASE_DEV = "http://127.0.0.1:5000/api/system/"
-API_BASE_PROD = "https://meritminer.cc/api/system/"
-API_ACQUIRE_DEV = "http://127.0.0.1:5000/api/systems/acquire/"
-API_ACQUIRE_PROD = "https://meritminer.cc/api/systems/acquire/"
+API_BASE_DEV = "http://127.0.0.1:5000/api/discord/system/"
+API_BASE_PROD = "https://meritminer.cc/api/discord/system/"
+API_ACQUIRE_DEV = "http://127.0.0.1:5000/api/discord/systems/acquire/"
+API_ACQUIRE_PROD = "https://meritminer.cc/api/discord/systems/acquire/"
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(description='Discord bot for MeritMiner')

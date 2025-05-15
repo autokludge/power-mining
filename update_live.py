@@ -437,18 +437,18 @@ def handle_power_data(message):
                     log_message("POWER", MAGENTA + f"System {system_name} last_updated timestamp set to: {updated_timestamp}", level=2)
                 
                 # Update power history with the same transaction
-                if controlling_power is not None or powers or control_progress is not None or power_reinforcement is not None or power_undermining is not None:
-                    log_message("POWER", MAGENTA + f"Calling update_power_history from handle_power_data", level=2)
-                    update_power_history(
-                        conn=conn,
-                        system_id64=system_id64,
-                        system_name=system_name,
-                        controlling_power=controlling_power,
-                        powers=powers,
-                        control_progress=control_progress,
-                        power_reinforcement=power_reinforcement,
-                        power_undermining=power_undermining
-                    )
+                # if controlling_power is not None or powers or control_progress is not None or power_reinforcement is not None or power_undermining is not None:
+                #     log_message("POWER", MAGENTA + f"Calling update_power_history from handle_power_data", level=2)
+                #     update_power_history(
+                #         conn=conn,
+                #         system_id64=system_id64,
+                #         system_name=system_name,
+                #         controlling_power=controlling_power,
+                #         powers=powers,
+                #         control_progress=control_progress,
+                #         power_reinforcement=power_reinforcement,
+                #         power_undermining=power_undermining
+                #     )
                 
                 conn.commit()
             else:
