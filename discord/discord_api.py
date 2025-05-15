@@ -12,7 +12,7 @@ discord_api_bp = Blueprint('discord_api', __name__)
 
 @discord_api_bp.route('/api/discord/system/<path:system_identifier>')
 def get_discord_system(system_identifier):
-    """Get detailed system information by name or id64 with Discord-specific fields"""
+    """Get detailed system information by name or id64"""
     try:
         conn = get_db_connection()
         if not conn:
@@ -63,21 +63,6 @@ def get_discord_system(system_identifier):
                 JOIN systems s ON s.id64 = ms.system_id64
                 WHERE {where_clause}
                 ORDER BY ms.ring_name, ms.mineral_type
-            ), power_history AS (
-                -- Get the latest power history record
-                SELECT 
-                    ph.system_id64,
-                    ph.control_progress,
-                    ph.power_reinforcement,
-                    ph.power_undermining,
-                    ph.control_points,
-                    ph.state_percent,
-                    ph.timestamp
-                FROM power_history ph
-                JOIN systems s ON s.id64 = ph.system_id64
-                WHERE {where_clause}
-                ORDER BY ph.timestamp DESC
-                LIMIT 1
             )
             SELECT 
                 s.id64,
@@ -91,12 +76,6 @@ def get_discord_system(system_identifier):
                 s.distance_from_sol,
                 COALESCE(NULLIF(s.system_state, 'NULL'), 'None') as system_state,
                 s.population,
-                s.control_progress,
-                s.power_reinforcement,
-                s.power_undermining,
-                ph.control_points,
-                ph.state_percent,
-                ph.timestamp as power_timestamp,
                 COALESCE(
                     json_agg(DISTINCT jsonb_build_object(
                         'name', ss.station_name,
@@ -127,12 +106,9 @@ def get_discord_system(system_identifier):
             FROM systems s
             LEFT JOIN system_stations ss ON s.id64 = ss.system_id64
             LEFT JOIN mineral_signals ms ON s.id64 = ms.system_id64
-            LEFT JOIN power_history ph ON s.id64 = ph.system_id64
             WHERE {where_clause}
-            GROUP BY s.id64, s.name, s.x, s.y, s.z, s.controlling_power, s.power_state, s.powers_acquiring, 
-                     s.distance_from_sol, s.system_state, s.population, s.control_progress, s.power_reinforcement, 
-                     s.power_undermining, ph.control_points, ph.state_percent, ph.timestamp
-        """, (system_identifier, system_identifier, system_identifier))
+            GROUP BY s.id64, s.name, s.x, s.y, s.z, s.controlling_power, s.power_state, s.powers_acquiring, s.distance_from_sol, s.system_state, s.population
+        """, (system_identifier, system_identifier))
         
         result = cur.fetchone()
         if not result:
@@ -140,7 +116,7 @@ def get_discord_system(system_identifier):
             conn.close()
             return jsonify({'error': 'System not found'}), 404
             
-        # Format response with Discord-specific fields
+        # Format response according to API format
         response = {
             'id64': result[0],
             'name': result[1],
@@ -155,16 +131,8 @@ def get_discord_system(system_identifier):
             'distanceFromSol': float(result[8]) if result[8] else None,
             'systemState': result[9],
             'population': int(result[10]) if result[10] else None,
-            # Discord-specific fields (power metrics)
-            'controlProgress': float(result[11]) if result[11] is not None else None,
-            'powerReinforcement': int(result[12]) if result[12] is not None else None,
-            'powerUndermining': int(result[13]) if result[13] is not None else None,
-            'controlPoints': int(result[14]) if result[14] is not None else None,
-            'statePercent': float(result[15]) if result[15] is not None else None,
-            'powerTimestamp': result[16].isoformat() if result[16] else None,
-            # Original fields
-            'stations': result[17] if result[17] else [],
-            'mineralSignals': result[18] if result[18] else []
+            'stations': result[11] if result[11] else [],
+            'mineralSignals': result[12] if result[12] else []
         }
         
         cur.close()
@@ -185,7 +153,7 @@ def get_discord_system(system_identifier):
 
 @discord_api_bp.route('/api/discord/systems/acquire/<path:system_identifier>')
 def discord_search_acquisition(system_identifier):
-    """Search for acquisition opportunities with Discord-specific fields"""
+    """Search for acquisition opportunities"""
     try:
         power = request.args.get('power')
         search_type = request.args.get('search', 'from_acquisition')
@@ -227,9 +195,8 @@ def discord_search_acquisition(system_identifier):
             'systems': []
         }
         
-        # Get full system details with Discord-specific fields
-        # This function needs to be modified to include Discord-specific fields
-        system_details = get_discord_system_details(conn, system_info['id64'])
+        # Get full system details
+        system_details = get_system_details(conn, system_info['id64'])
         
         if search_type == 'from_acquisition':
             # Check if system is unoccupied
@@ -247,13 +214,13 @@ def discord_search_acquisition(system_identifier):
             result['systems'].append(system_details)
             
             for sys in nearby['fortified']:
-                sys_details = get_discord_system_details(conn, sys['id64'])
+                sys_details = get_system_details(conn, sys['id64'])
                 sys_details['systemType'] = 'Fortified'
                 sys_details['distanceToSource'] = sys['distance']  # Add distance to source system
                 result['systems'].append(sys_details)
                 
             for sys in nearby['strongholds']:
-                sys_details = get_discord_system_details(conn, sys['id64'])
+                sys_details = get_system_details(conn, sys['id64'])
                 sys_details['systemType'] = 'Stronghold'
                 sys_details['distanceToSource'] = sys['distance']  # Add distance to source system
                 result['systems'].append(sys_details)
@@ -279,7 +246,7 @@ def discord_search_acquisition(system_identifier):
             
             # Add acquisition systems with distance
             for sys in acquisition_systems:
-                sys_details = get_discord_system_details(conn, sys['id64'])
+                sys_details = get_system_details(conn, sys['id64'])
                 sys_details['systemType'] = 'Acquisition'
                 sys_details['distanceToSource'] = sys['distance']  # Add distance to source system
                 result['systems'].append(sys_details)
@@ -292,8 +259,8 @@ def discord_search_acquisition(system_identifier):
             conn.close()
         return jsonify({'error': str(e)}), 500
 
-def get_discord_system_details(conn, system_id64: int) -> dict:
-    """Get full system details including Discord-specific fields"""
+def get_system_details(conn, system_id64: int) -> dict:
+    """Get full system details including stations and mineral signals"""
     cur = conn.cursor()
     
     # Get system info with stations and commodities
@@ -327,20 +294,6 @@ def get_discord_system_details(conn, system_id64: int) -> dict:
                 ms.reserve_level
             FROM mineral_signals ms
             WHERE ms.system_id64 = %s
-        ), power_history AS (
-            -- Get the latest power history record
-            SELECT 
-                ph.system_id64,
-                ph.control_progress,
-                ph.power_reinforcement,
-                ph.power_undermining,
-                ph.control_points,
-                ph.state_percent,
-                ph.timestamp
-            FROM power_history ph
-            WHERE ph.system_id64 = %s
-            ORDER BY ph.timestamp DESC
-            LIMIT 1
         )
         SELECT 
             s.id64,
@@ -352,12 +305,6 @@ def get_discord_system_details(conn, system_id64: int) -> dict:
             s.distance_from_sol,
             COALESCE(NULLIF(s.system_state, 'NULL'), 'None') as system_state,
             s.population,
-            s.control_progress,
-            s.power_reinforcement,
-            s.power_undermining,
-            ph.control_points,
-            ph.state_percent,
-            ph.timestamp as power_timestamp,
             COALESCE(
                 json_agg(DISTINCT jsonb_build_object(
                     'name', ss.station_name,
@@ -388,13 +335,10 @@ def get_discord_system_details(conn, system_id64: int) -> dict:
         FROM systems s
         LEFT JOIN system_stations ss ON s.id64 = ss.system_id64
         LEFT JOIN mineral_signals ms ON s.id64 = ms.system_id64
-        LEFT JOIN power_history ph ON s.id64 = ph.system_id64
         WHERE s.id64 = %s
         GROUP BY s.id64, s.name, s.x, s.y, s.z, s.controlling_power, s.power_state, 
-                 s.powers_acquiring, s.distance_from_sol, s.system_state, s.population,
-                 s.control_progress, s.power_reinforcement, s.power_undermining,
-                 ph.control_points, ph.state_percent, ph.timestamp
-    """, (system_id64, system_id64, system_id64, system_id64))
+                 s.powers_acquiring, s.distance_from_sol, s.system_state, s.population
+    """, (system_id64, system_id64, system_id64))
     
     result = cur.fetchone()
     if not result:
@@ -415,17 +359,63 @@ def get_discord_system_details(conn, system_id64: int) -> dict:
         'distanceFromSol': float(result[8]) if result[8] else None,
         'systemState': result[9],
         'population': int(result[10]) if result[10] else None,
-        # Discord-specific fields (power metrics)
-        'controlProgress': float(result[11]) if result[11] is not None else None,
-        'powerReinforcement': int(result[12]) if result[12] is not None else None,
-        'powerUndermining': int(result[13]) if result[13] is not None else None,
-        'controlPoints': int(result[14]) if result[14] is not None else None,
-        'statePercent': float(result[15]) if result[15] is not None else None,
-        'powerTimestamp': result[16].isoformat() if result[16] else None,
-        # Original fields
-        'stations': result[17] if result[17] else [],
-        'mineralSignals': result[18] if result[18] else []
+        'stations': result[11] if result[11] else [],
+        'mineralSignals': result[12] if result[12] else []
     }
     
     cur.close()
     return response
+
+def find_systems_in_range(conn, x: float, y: float, z: float, range_ly: float, power: str = None, power_state: str = None, unoccupied_only: bool = False) -> list:
+    """Find systems within range matching power criteria"""
+    cur = conn.cursor()
+    
+    query = """
+        SELECT id64, name, x, y, z, controlling_power, power_state, population,
+               SQRT(POWER(x - %s, 2) + POWER(y - %s, 2) + POWER(z - %s, 2)) as distance
+        FROM systems
+        WHERE POWER(x - %s, 2) + POWER(y - %s, 2) + POWER(z - %s, 2) <= POWER(%s, 2)
+    """
+    params = [x, y, z, x, y, z, range_ly]
+    
+    if power:
+        query += " AND controlling_power = %s"
+        params.append(power)
+    if power_state:
+        query += " AND power_state = %s"
+        params.append(power_state)
+    if unoccupied_only:
+        query += " AND controlling_power IS NULL AND population > 0"
+    
+    cur.execute(query, params)
+    systems = cur.fetchall()
+    cur.close()
+    
+    return [{
+        'id64': s[0],
+        'name': s[1],
+        'coords': {'x': float(s[2]), 'y': float(s[3]), 'z': float(s[4])},
+        'controllingPower': s[5],
+        'powerState': s[6],
+        'population': int(s[7]) if s[7] else None,
+        'distance': float(s[8])
+    } for s in systems]
+
+def find_acquisition_systems(conn, x: float, y: float, z: float, power: str) -> dict:
+    """Find acquisition and control systems"""
+    # Find fortified systems within 20ly
+    fortified = find_systems_in_range(conn, x, y, z, FORTIFIED_RANGE, power, "Fortified")
+    
+    # Find stronghold systems within 30ly
+    strongholds = find_systems_in_range(conn, x, y, z, STRONGHOLD_RANGE, power, "Stronghold")
+    
+    # Find unoccupied systems in range
+    acquisition_systems = []
+    if fortified or strongholds:
+        acquisition_systems = find_systems_in_range(conn, x, y, z, STRONGHOLD_RANGE, unoccupied_only=True)
+    
+    return {
+        'fortified': fortified,
+        'strongholds': strongholds,
+        'acquisition': acquisition_systems
+    }
