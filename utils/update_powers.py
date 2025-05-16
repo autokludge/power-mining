@@ -131,7 +131,9 @@ def update_power_history(conn, system_id64, system_name, controlling_power, powe
         # Calculate trend_percent from previous state_percent
         trend_percent = None
         if state_percent is not None and prev_record and prev_record[4] is not None:
-            trend_percent = round(state_percent - prev_record[4], 2)
+            # Convert decimal.Decimal to float if needed
+            prev_state_percent = float(prev_record[4]) if prev_record[4] is not None else None
+            trend_percent = round(state_percent - prev_state_percent, 2)
             
         # Calculate cp_delta from previous control_points
         cp_delta = None
