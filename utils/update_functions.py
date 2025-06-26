@@ -487,7 +487,8 @@ def save_system_from_fsdjump(message, DATABASE_URL, max_distance=2000.0):
                     powers=powers,
                     control_progress=control_progress,
                     power_reinforcement=power_reinforcement,
-                    power_undermining=power_undermining
+                    power_undermining=power_undermining,
+                    power_state=power_state
                 )
             
             result = cursor.fetchone()

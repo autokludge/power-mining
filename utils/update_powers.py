@@ -3,8 +3,22 @@ import psycopg2
 from datetime import datetime, timezone
 from utils.update_log import log_message
 
+# Add power state mapping dictionary
+POWER_STATE_MAPPING = {
+    'Exploited': 1,
+    'Controlled': 1,  # Map incorrect 'Controlled' to Exploited
+    'Fortified': 2,
+    'Stronghold': 3,
+    'InPrepareRadius': 4,
+    'Prepared': 5,
+    'Turmoil': 6,
+    'Unoccupied': 7,
+    None: 0,          # Default for null
+    '': 0             # Default for empty string
+}
+
 def update_power_history(conn, system_id64, system_name, controlling_power, powers, 
-                        control_progress, power_reinforcement, power_undermining):
+                        control_progress, power_reinforcement, power_undermining, power_state=None):
     """
     Update the power_history table with the latest Powerplay metrics
     Will calculate trend based on previous records and manage hourly snapshots
@@ -18,6 +32,7 @@ def update_power_history(conn, system_id64, system_name, controlling_power, powe
         control_progress: PowerplayStateControlProgress value
         power_reinforcement: PowerplayStateReinforcement value
         power_undermining: PowerplayStateUndermining value
+        power_state: PowerplayState string value
         
     Returns:
         bool: True if record was added, False if skipped
@@ -30,7 +45,7 @@ def update_power_history(conn, system_id64, system_name, controlling_power, powe
     current_time = datetime.now(timezone.utc)
     
     # DEBUG: Log incoming power data to track consistency between tables
-    log_message("POWER", f"update_power_history received: system={system_name}, control_progress={control_progress}, power_reinforcement={power_reinforcement}, power_undermining={power_undermining}", level=1)
+    log_message("POWER", f"update_power_history received: system={system_name}, control_progress={control_progress}, power_reinforcement={power_reinforcement}, power_undermining={power_undermining}, power_state={power_state}", level=1)
     
     try:
         cursor = conn.cursor()
@@ -42,6 +57,11 @@ def update_power_history(conn, system_id64, system_name, controlling_power, powe
             power_id_result = cursor.fetchone()
             if power_id_result:
                 power_id = power_id_result[0]
+        
+        # Convert power_state string to integer using mapping
+        power_state_int = POWER_STATE_MAPPING.get(power_state, 0)
+        if power_state and power_state_int != 0:
+            log_message("POWER", f"Mapped power state '{power_state}' to {power_state_int}", level=2)
         
         # Convert powers list to powers_acquiring array of IDs
         powers_acquiring = []
@@ -199,6 +219,7 @@ def update_power_history(conn, system_id64, system_name, controlling_power, powe
                     timestamp, 
                     system_id64, 
                     power_id, 
+                    power_state,
                     powers_acquiring, 
                     control_progress, 
                     trend,
@@ -209,12 +230,13 @@ def update_power_history(conn, system_id64, system_name, controlling_power, powe
                     state_percent,
                     trend_percent
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
             """, (
                 current_time,
                 system_id64,
                 power_id,
+                power_state_int,
                 powers_acquiring if powers_acquiring else None,
                 rounded_control_progress,  # Use the rounded value
                 trend,  # Already rounded above
@@ -235,7 +257,8 @@ def update_power_history(conn, system_id64, system_name, controlling_power, powe
                     
             cp_info = f", CP: {control_points}" if control_points is not None else ""
             cp_delta_info = f" ({cp_delta:+})" if cp_delta is not None else ""
-            log_message("POWER", f"Added power history for {system_name} - Trend: {trend:+.3f}{state_info}{cp_info}{cp_delta_info}", level=2)
+            power_state_info = f", Power State: {power_state}({power_state_int})" if power_state else ""
+            log_message("POWER", f"Added power history for {system_name} - Trend: {trend:+.3f}{state_info}{cp_info}{cp_delta_info}{power_state_info}", level=2)
             return True
         else:
             log_message("POWER", f"Skipped update for {system_name} (throttled)", level=3)

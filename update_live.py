@@ -447,7 +447,8 @@ def handle_power_data(message):
                 #         powers=powers,
                 #         control_progress=control_progress,
                 #         power_reinforcement=power_reinforcement,
-                #         power_undermining=power_undermining
+                #         power_undermining=power_undermining,
+                #         power_state=power_state
                 #     )
                 
                 conn.commit()
