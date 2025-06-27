@@ -618,6 +618,11 @@ def save_station_from_docked(message, DATABASE_URL, full_message=None, tracker=N
     # Validate required fields
     if not all([station_name, market_id, system_id64]):
         log_message("ERROR", f"Missing required station info in Docked event", level=1)
+        
+        # Mark message processing as failed
+        if message_id and tracker:
+            tracker.success(message_id, False)
+        
         return False
     
     # Extract other station details
@@ -766,6 +771,9 @@ def update_station_body_from_location(message, DATABASE_URL, message_id=None, tr
     """
     # Check if this is a valid Location event while docked at a station
     if not message.get("Docked") or not message.get("StationName") or not message.get("Body"):
+        # Mark message processing as failed for invalid data
+        if message_id and tracker:
+            tracker.success(message_id, False)
         return False
 
     # Extract essential information
@@ -775,6 +783,9 @@ def update_station_body_from_location(message, DATABASE_URL, message_id=None, tr
     
     # Validate we have the required fields
     if not all([station_name, system_id64, body]):
+        # Mark message processing as failed for missing data
+        if message_id and tracker:
+            tracker.success(message_id, False)
         return False
     
     try:
