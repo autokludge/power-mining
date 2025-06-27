@@ -3,25 +3,32 @@ import psycopg2
 from datetime import datetime, timezone
 from utils.update_log import log_message
 
-# Add power state mapping dictionary
+# Power state mapping dictionary (updated for Powerplay 2.0)
 POWER_STATE_MAPPING = {
     'Exploited': 1,
-    'Controlled': 1,  # Map incorrect 'Controlled' to Exploited
+    'Controlled': 1,  # Map incorrect 'Controlled' to Exploited (legacy compatibility)
     'Fortified': 2,
     'Stronghold': 3,
     'InPrepareRadius': 4,
     'Prepared': 5,
     'Turmoil': 6,
     'Unoccupied': 7,
+    'Contested': 8,   # Added missing state
     None: 0,          # Default for null
     '': 0             # Default for empty string
 }
 
 def update_power_history(conn, system_id64, system_name, controlling_power, powers, 
-                        control_progress, power_reinforcement, power_undermining, power_state=None):
+                        control_progress, power_reinforcement, power_undermining, power_state=None, timestamp=None):
     """
     Update the power_history table with the latest Powerplay metrics
     Will calculate trend based on previous records and manage hourly snapshots
+    
+    POWERPLAY 2.0 MECHANICS (correct as of 2025):
+    - control_progress ranges 0.0-2.0, relative to current power_state
+    - Key thresholds: 35k (contested), 120k (control), 453k (fortified), 1.12M (stronghold), 2.12M (max)
+    - Band sizes: Exploited=333k, Fortified=667k, Stronghold=1M
+    - control_progress 1.0 = enough merits to advance to next state
     
     Args:
         conn: Database connection (from the parent function)
@@ -29,21 +36,21 @@ def update_power_history(conn, system_id64, system_name, controlling_power, powe
         system_name: Name of the system (for logging only)
         controlling_power: Name of the controlling power
         powers: List of powers contesting the system
-        control_progress: PowerplayStateControlProgress value
-        power_reinforcement: PowerplayStateReinforcement value
-        power_undermining: PowerplayStateUndermining value
-        power_state: PowerplayState string value
+        control_progress: PowerplayStateControlProgress value (0.0-2.0, relative to current state)
+        power_reinforcement: PowerplayStateReinforcement value (raw control points)
+        power_undermining: PowerplayStateUndermining value (raw control points) 
+        power_state: PowerplayState string value (CRITICAL for correct control_progress interpretation)
+        timestamp: Original EDDN timestamp (converted to database-compatible format). Defaults to current time if None.
         
     Returns:
         bool: True if record was added, False if skipped
     """
-    # Skip if we don't have any Powerplay metrics at all
-    if controlling_power is None and not powers and control_progress is None and power_reinforcement is None and power_undermining is None:
+    # Skip if we don't have any meaningful Powerplay data at all  
+    # Power state changes are also valuable historical data
+    if (controlling_power is None and not powers and control_progress is None and 
+        power_reinforcement is None and power_undermining is None and power_state is None):
         return False
-        
-    # Current timestamp
-    current_time = datetime.now(timezone.utc)
-    
+            
     # DEBUG: Log incoming power data to track consistency between tables
     log_message("POWER", f"update_power_history received: system={system_name}, control_progress={control_progress}, power_reinforcement={power_reinforcement}, power_undermining={power_undermining}, power_state={power_state}", level=1)
     
@@ -93,7 +100,7 @@ def update_power_history(conn, system_id64, system_name, controlling_power, powe
         # Check if we should add a new record (prevent too frequent updates)
         should_update = True
         
-        # Calculate control points properly
+        # Calculate control points correctly using power_state context
         control_points = None
         
         # Method 1: Direct calculation if we have reinforcement and undermining values
@@ -101,52 +108,51 @@ def update_power_history(conn, system_id64, system_name, controlling_power, powe
             control_points = power_reinforcement - power_undermining
             log_message("POWER", f"Control points calculated from R-U: {control_points}", level=3)
         
-        # Method 2: Calculate from control_progress if available
-        elif control_progress is not None:
-            if control_progress < 0:
-                # Negative progress means undermining
+        # Method 2: Calculate from control_progress + power_state (the correct way)
+        elif control_progress is not None and power_state is not None:
+            # Get power_state integer value
+            power_state_int = POWER_STATE_MAPPING.get(power_state, 0)
+            
+            if power_state_int == 1:  # Exploited
+                # control_progress 0.0-1.0 spans the 333,333 CP Exploited band
+                # Base is 0, so control_points = progress * band_width
+                control_points = int(control_progress * 333333)
+                log_message("POWER", f"Control points calculated for Exploited state: {control_points}", level=3)
+                
+            elif power_state_int == 2:  # Fortified  
+                # Base Fortified threshold = 453,333, band width = 666,667
+                control_points = 453333 + int(control_progress * 666667)
+                log_message("POWER", f"Control points calculated for Fortified state: {control_points}", level=3)
+                
+            elif power_state_int == 3:  # Stronghold
+                # Base Stronghold threshold = 1,120,000, band width = 1,000,000
+                control_points = 1120000 + int(control_progress * 1000000)
+                log_message("POWER", f"Control points calculated for Stronghold state: {control_points}", level=3)
+                
+            elif power_state_int in [5, 6, 7, 8]:  # Prepared, Turmoil, Unoccupied, Contested
+                # These states should NOT have control_progress data
+                # If we see this combination, it's likely a data interpretation error
+                log_message("POWER", f"WARNING: Unexpected control_progress {control_progress} for power_state {power_state} - these states shouldn't have progression data", level=1)
+                control_points = None  # Don't calculate bogus values
+                
+            else:
+                # Unknown state, use control_progress as-is scaled to 120k
                 control_points = int(control_progress * 120000)
-                log_message("POWER", f"Control points calculated from negative progress: {control_points}", level=3)
-            else:
-                # Determine which band we're in based on control_progress value
-                if control_progress < 1.0:
-                    # Likely in Acquisition/contested phase (less than 100% Exploited)
-                    control_points = int(control_progress * 120000)
-                    log_message("POWER", f"Control points calculated from Acquisition progress: {control_points}", level=3)
-                elif control_progress < 2.0:
-                    # Likely in Exploited phase (100%-200% progress)
-                    adjusted_progress = control_progress - 1.0  # Normalize to 0-1 range
-                    control_points = 120000 + int(adjusted_progress * 333333)
-                    log_message("POWER", f"Control points calculated from Exploited progress: {control_points}", level=3)
-                elif control_progress < 3.0:
-                    # Likely in Fortified phase (200%-300% progress)
-                    adjusted_progress = control_progress - 2.0  # Normalize to 0-1 range
-                    control_points = 453333 + int(adjusted_progress * 666667)
-                    log_message("POWER", f"Control points calculated from Fortified progress: {control_points}", level=3)
-                else:
-                    # Likely in Stronghold phase (300%+ progress)
-                    adjusted_progress = control_progress - 3.0  # Normalize to 0-1 range
-                    control_points = 1120000 + int(adjusted_progress * 1000000)
-                    log_message("POWER", f"Control points calculated from Stronghold progress: {control_points}", level=3)
+                log_message("POWER", f"Control points calculated for unknown state {power_state}: {control_points}", level=3)
         
-        # Calculate state_percent based on control points
+        # Method 3: Fallback when we have control_progress but no power_state
+        elif control_progress is not None:
+            # Without power_state context, assume acquisition/unoccupied context (120k scale)
+            control_points = int(control_progress * 120000)
+            log_message("POWER", f"Control points calculated without power_state context: {control_points}", level=3)
+        
+        # Calculate state_percent correctly based on current power_state
         state_percent = None
-        if control_points is not None:
-            if control_points < 0:
-                # Undermined (negative control points)
-                state_percent = round((control_points / 120000.0) * 100, 2)
-            elif control_points < 120000:
-                # Acquisition phase (0 to 119,999)
-                state_percent = round((control_points / 120000.0) * 100, 2)
-            elif control_points < 453333:
-                # Exploited (120,000 to 453,332)
-                state_percent = round(((control_points - 120000) / 333333.0) * 100, 2)
-            elif control_points < 1120000:
-                # Fortified (453,333 to 1,119,999)
-                state_percent = round(((control_points - 453333) / 666667.0) * 100, 2)
-            else:
-                # Stronghold (1,120,000+)
-                state_percent = round(((control_points - 1120000) / 1000000.0) * 100, 2)
+        if control_progress is not None:
+            # state_percent is simply control_progress converted to percentage
+            # This represents percentage through the current state band
+            state_percent = round(control_progress * 100, 2)
+            log_message("POWER", f"State percent calculated: {state_percent}% (from control_progress {control_progress})", level=3)
         
         # Calculate trend_percent from previous state_percent
         trend_percent = None
@@ -175,7 +181,7 @@ def update_power_history(conn, system_id64, system_name, controlling_power, powe
             last_update_time = prev_record[1]
             
             # Calculate hours since last update
-            hours_diff = (current_time - last_update_time).total_seconds() / 3600
+            hours_diff = (timestamp - last_update_time).total_seconds() / 3600
             
             # Get previous values for comparison
             prev_control_progress = prev_record[0]
@@ -233,7 +239,7 @@ def update_power_history(conn, system_id64, system_name, controlling_power, powe
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
             """, (
-                current_time,
+                timestamp,
                 system_id64,
                 power_id,
                 power_state_int,
@@ -269,4 +275,206 @@ def update_power_history(conn, system_id64, system_name, controlling_power, powe
         log_message("ERROR", f"Error updating power history for {system_name}: {str(e)}", level=1)
         import traceback
         log_message("ERROR", f"Traceback: {traceback.format_exc()}", level=1)
+        return False
+
+def update_power_conflicts(conn, system_id64, system_name, conflict_progress_list, power_state=None, timestamp=None):
+    """
+    Update the power_conflicts table with ConflictProgress data
+    
+    Args:
+        conn: Database connection (from the parent function)
+        system_id64: System ID64 value
+        system_name: Name of the system (for logging only)
+        conflict_progress_list: List of {"ConflictProgress": float, "Power": string} dictionaries
+        power_state: PowerplayState string value for context
+        timestamp: Original EDDN timestamp (converted to database-compatible format)
+        
+    Returns:
+        bool: True if record was added, False if skipped
+    """
+    if not conflict_progress_list or not isinstance(conflict_progress_list, list):
+        return False
+        
+    log_message("CONFLICT", f"update_power_conflicts received: system={system_name}, conflicts={len(conflict_progress_list)}, power_state={power_state}", level=1)
+    
+    try:
+        cursor = conn.cursor()
+        
+        # Convert power_state string to integer using mapping
+        power_state_int = POWER_STATE_MAPPING.get(power_state, 0)
+        if power_state and power_state_int != 0:
+            log_message("CONFLICT", f"Mapped power state '{power_state}' to {power_state_int}", level=2)
+        
+        # Initialize all power columns to NULL
+        power_columns = {
+            'aisling_duval': None,
+            'arissa_lavigny_duval': None,
+            'archon_delaine': None,
+            'denton_patreus': None,
+            'edmund_mahon': None,
+            'felicia_winters': None,
+            'jerome_archer': None,
+            'li_yong_rui': None,
+            'nakato_kaine': None,
+            'pranav_antal': None,
+            'yuri_grom': None,
+            'zemina_torval': None
+        }
+        
+        # Map power names to database column names
+        power_name_mapping = {
+            'Aisling Duval': 'aisling_duval',
+            'Arissa Lavigny-Duval': 'arissa_lavigny_duval',
+            'Archon Delaine': 'archon_delaine',
+            'Denton Patreus': 'denton_patreus',
+            'Edmund Mahon': 'edmund_mahon',
+            'Felicia Winters': 'felicia_winters',
+            'Jerome Archer': 'jerome_archer',
+            'Li Yong-Rui': 'li_yong_rui',
+            'Nakato Kaine': 'nakato_kaine',
+            'Pranav Antal': 'pranav_antal',
+            'Yuri Grom': 'yuri_grom',
+            'Zemina Torval': 'zemina_torval'
+        }
+        
+        # Process each conflict progress entry
+        for conflict_entry in conflict_progress_list:
+            if not isinstance(conflict_entry, dict):
+                continue
+                
+            power_name = conflict_entry.get("Power")
+            conflict_progress = conflict_entry.get("ConflictProgress")
+            
+            if power_name is None or conflict_progress is None:
+                continue
+                
+            # Map power name to column name
+            column_name = power_name_mapping.get(power_name)
+            if column_name:
+                power_columns[column_name] = conflict_progress
+                log_message("CONFLICT", f"  {power_name}: {conflict_progress}", level=2)
+            else:
+                log_message("CONFLICT", f"Unknown power name: {power_name}", level=1)
+        
+        # Check if we have any valid conflict data
+        has_data = any(value is not None for value in power_columns.values())
+        if not has_data:
+            log_message("CONFLICT", f"No valid conflict data for {system_name}", level=2)
+            return False
+        
+        # Insert the conflict record
+        cursor.execute("""
+            INSERT INTO power_conflicts (
+                timestamp, 
+                system_id64, 
+                power_state,
+                aisling_duval,
+                arissa_lavigny_duval,
+                archon_delaine,
+                denton_patreus,
+                edmund_mahon,
+                felicia_winters,
+                jerome_archer,
+                li_yong_rui,
+                nakato_kaine,
+                pranav_antal,
+                yuri_grom,
+                zemina_torval
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            )
+        """, (
+            timestamp,
+            system_id64,
+            power_state_int,
+            power_columns['aisling_duval'],
+            power_columns['arissa_lavigny_duval'],
+            power_columns['archon_delaine'],
+            power_columns['denton_patreus'],
+            power_columns['edmund_mahon'],
+            power_columns['felicia_winters'],
+            power_columns['jerome_archer'],
+            power_columns['li_yong_rui'],
+            power_columns['nakato_kaine'],
+            power_columns['pranav_antal'],
+            power_columns['yuri_grom'],
+            power_columns['zemina_torval']
+        ))
+        
+        # Count participating powers
+        participating_powers = [name for name, value in power_columns.items() if value is not None]
+        power_state_info = f", Power State: {power_state}({power_state_int})" if power_state else ""
+        log_message("CONFLICT", f"Added power conflict for {system_name} - {len(participating_powers)} powers participating{power_state_info}", level=2)
+        return True
+        
+    except Exception as e:
+        log_message("ERROR", f"Error updating power conflicts for {system_name}: {str(e)}", level=1)
+        import traceback
+        log_message("ERROR", f"Traceback: {traceback.format_exc()}", level=1)
+        return False
+
+def route_power_data(conn, system_id64, system_name, message, timestamp):
+    """
+    Route power data to the appropriate table based on data type
+    
+    Routing Logic:
+    - If "PowerplayStateControlProgress" is NOT NULL → save to power_history
+    - If "PowerplayConflictProgress" exists at all → save to power_conflicts
+    - These are mutually exclusive - no cross-contamination
+    
+    Args:
+        conn: Database connection 
+        system_id64: System ID64 value
+        system_name: Name of the system (for logging)
+        message: EDDN message data containing power fields
+        timestamp: Original EDDN timestamp (converted to database-compatible format)
+        
+    Returns:
+        bool: True if any data was processed, False otherwise
+    """
+    # Extract power data from message
+    control_progress = message.get("PowerplayStateControlProgress")
+    conflict_progress = message.get("PowerplayConflictProgress")
+    power_state = message.get("PowerplayState")
+    
+    # Route based on data type (mutually exclusive)
+    if control_progress is not None:
+        # This is power history data - route to power_history table
+        log_message("ROUTE", f"Routing {system_name} to power_history (PowerplayStateControlProgress={control_progress})", level=2)
+        
+        # Extract other power history fields
+        controlling_power = message.get("ControllingPower")
+        powers = message.get("Powers", [])
+        power_reinforcement = message.get("PowerplayStateReinforcement") 
+        power_undermining = message.get("PowerplayStateUndermining")
+        
+        return update_power_history(
+            conn=conn,
+            system_id64=system_id64,
+            system_name=system_name,
+            controlling_power=controlling_power,
+            powers=powers,
+            control_progress=control_progress,
+            power_reinforcement=power_reinforcement,
+            power_undermining=power_undermining,
+            power_state=power_state,
+            timestamp=timestamp
+        )
+        
+    elif conflict_progress is not None:
+        # This is conflict data - route to power_conflicts table
+        log_message("ROUTE", f"Routing {system_name} to power_conflicts ({len(conflict_progress)} conflicts)", level=2)
+        
+        return update_power_conflicts(
+            conn=conn,
+            system_id64=system_id64,
+            system_name=system_name,
+            conflict_progress_list=conflict_progress,
+            power_state=power_state,
+            timestamp=timestamp
+        )
+        
+    else:
+        # No power progression data found
+        log_message("ROUTE", f"No power progression data found for {system_name}", level=3)
         return False

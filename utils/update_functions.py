@@ -1,7 +1,7 @@
 import json
 import psycopg2
 from datetime import datetime
-from utils.update_log import log_message
+from utils.update_log import log_message, convert_eddn_timestamp_to_db, tracker
 from utils.update_powers import update_power_history
 
 # ANSI color codes for consistent styling
@@ -329,7 +329,7 @@ def handle_saa_signals(message, DATABASE_URL):
         log_message("ERROR", f"Traceback: {traceback.format_exc()}", level=1)
         return False
 
-def save_system_from_fsdjump(message, DATABASE_URL, max_distance=2000.0):
+def save_system_from_fsdjump(message, DATABASE_URL, max_distance=2000.0, message_id=None):
     """
     Save or update system data from an FSDJump event
     Only saves systems within the specified distance from Sol (in light years)
@@ -338,6 +338,7 @@ def save_system_from_fsdjump(message, DATABASE_URL, max_distance=2000.0):
         message (dict): FSDJump event data
         DATABASE_URL (str): Database connection string
         max_distance (float): Maximum distance from Sol in light years (default: 2000)
+        message_id (int, optional): Message ID for tracking
         
     Returns:
         bool: True if system was saved, False if skipped or failed
@@ -417,9 +418,9 @@ def save_system_from_fsdjump(message, DATABASE_URL, max_distance=2000.0):
     if government.startswith("$government_"):
         government = government[len("$government_"):].rstrip(";")
     
-    # Get current timestamp in UTC
-    from datetime import datetime, timezone
-    current_timestamp = datetime.now(timezone.utc)
+    # Get both original and converted timestamps
+    original_timestamp = message.get("timestamp")
+    current_timestamp = convert_eddn_timestamp_to_db(original_timestamp)
     
     # If controlling power exists in powers list, remove it
     if controlling_power and isinstance(powers, list) and controlling_power in powers:
@@ -432,6 +433,9 @@ def save_system_from_fsdjump(message, DATABASE_URL, max_distance=2000.0):
         with psycopg2.connect(DATABASE_URL) as conn:
             cursor = conn.cursor()
             
+            # Lock the row to prevent conflicts with other functions
+            cursor.execute("SELECT id64 FROM systems WHERE id64 = %s FOR UPDATE", (system_id64,))
+            
             # Use UPSERT pattern for the system data
             cursor.execute("""
                 INSERT INTO systems (
@@ -439,13 +443,13 @@ def save_system_from_fsdjump(message, DATABASE_URL, max_distance=2000.0):
                     controlling_power, power_state, powers_acquiring,
                     control_progress, power_reinforcement, power_undermining,
                     primary_economy, secondary_economy, security, 
-                    government, last_updated
+                    government, last_updated, timestamp
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s, 
                     %s, %s, %s::jsonb,
                     %s, %s, %s,
                     %s, %s, %s,
-                    %s, %s
+                    %s, %s, %s
                 )
                 ON CONFLICT (id64) DO UPDATE SET
                     name = EXCLUDED.name,
@@ -463,46 +467,65 @@ def save_system_from_fsdjump(message, DATABASE_URL, max_distance=2000.0):
                     secondary_economy = COALESCE(EXCLUDED.secondary_economy, systems.secondary_economy),
                     security = COALESCE(EXCLUDED.security, systems.security),
                     government = COALESCE(EXCLUDED.government, systems.government),
-                    last_updated = EXCLUDED.last_updated
+                    last_updated = EXCLUDED.last_updated,
+                    timestamp = EXCLUDED.timestamp
                 RETURNING id64
             """, (
                 system_id64, system_name, x, y, z, distance_from_sol,
                 controlling_power, power_state, json.dumps(powers),
                 control_progress, power_reinforcement, power_undermining, 
                 primary_economy, secondary_economy, security,
-                government, current_timestamp
+                government, current_timestamp, original_timestamp
             ))
             
             # Update power history if we have any Powerplay data
-            if controlling_power or powers or control_progress is not None or power_reinforcement is not None or power_undermining is not None:
-                # DEBUG: Log the exact power data before calling update_power_history
-                log_message("POWER", f"Calling update_power_history for {system_name} with control_progress={control_progress}, power_reinforcement={power_reinforcement}, power_undermining={power_undermining}", level=1)
-                
-                # Update power history with the same transaction
-                update_power_history(
-                    conn=conn,
-                    system_id64=system_id64,
-                    system_name=system_name,
-                    controlling_power=controlling_power,
-                    powers=powers,
-                    control_progress=control_progress,
-                    power_reinforcement=power_reinforcement,
-                    power_undermining=power_undermining,
-                    power_state=power_state
-                )
+            # if controlling_power or powers or control_progress is not None or power_reinforcement is not None or power_undermining is not None:
+            #     # DEBUG: Log the exact power data before calling update_power_history
+            #     log_message("POWER", f"Calling update_power_history for {system_name} with control_progress={control_progress}, power_reinforcement={power_reinforcement}, power_undermining={power_undermining}", level=1)
+            #     
+            #     # Update power history with the same transaction
+            #     update_power_history(
+            #         conn=conn,
+            #         system_id64=system_id64,
+            #         system_name=system_name,
+            #         controlling_power=controlling_power,
+            #         powers=powers,
+            #         control_progress=control_progress,
+            #         power_reinforcement=power_reinforcement,
+            #         power_undermining=power_undermining,
+            #         power_state=power_state
+            #     )
             
             result = cursor.fetchone()
             if result:
                 log_message("SYSTEM", f"✓ Successfully saved system {system_name}", level=1)
+                
+                # Mark message processing as complete with timestamp verification
+                if message_id and tracker:
+                    tracker.write(message_id)
+                    tracker.success(message_id, True, original_timestamp, original_timestamp, "systems")
+                
                 return True
             else:
                 log_message("ERROR", f"Failed to save system {system_name}", level=1)
+                
+                # Mark message processing as failed
+                if message_id and tracker:
+                    tracker.write(message_id)
+                    tracker.success(message_id, False)
+                
                 return False
                 
     except Exception as e:
         log_message("ERROR", f"Database error saving system: {str(e)}", level=1)
         import traceback
         log_message("ERROR", f"Traceback: {traceback.format_exc()}", level=1)
+        
+        # Mark message processing as failed
+        if message_id and tracker:
+            tracker.write(message_id)
+            tracker.success(message_id, False)
+        
         return False
 
 def transform_economy_data(economies_data):
@@ -549,7 +572,7 @@ def transform_economy_data(economies_data):
         log_message("ERROR", f"Error transforming economy data: {str(e)}", level=1)
         return None
 
-def save_station_from_docked(message, DATABASE_URL):
+def save_station_from_docked(message, DATABASE_URL, message_id=None):
     """
     Save station data from a Docked event
     Only saves the station if:
@@ -560,6 +583,7 @@ def save_station_from_docked(message, DATABASE_URL):
     Args:
         message (dict): Docked event data
         DATABASE_URL (str): Database connection string
+        message_id (int, optional): Message ID for tracking
         
     Returns:
         bool: True if station was saved or already exists, False if failed
@@ -610,9 +634,9 @@ def save_station_from_docked(message, DATABASE_URL):
     # Convert to JSON string for database
     economies_json = json.dumps(transformed_economies) if transformed_economies else json.dumps(economies)
     
-    # Get current timestamp
-    from datetime import datetime, timezone
-    current_timestamp = datetime.now(timezone.utc)
+    # Get both original and converted timestamps
+    original_timestamp = message.get("timestamp")
+    current_timestamp = convert_eddn_timestamp_to_db(original_timestamp)
     
     # Determine if station has a market based on services
     has_market = False
@@ -633,6 +657,12 @@ def save_station_from_docked(message, DATABASE_URL):
             
             if not system_result:
                 log_message("STATION", f"Cannot save station {station_name} - system ID {system_id64} does not exist in the database", level=1)
+                
+                # Mark message processing as failed
+                if message_id and tracker:
+                    tracker.write(message_id)
+                    tracker.success(message_id, False)
+                
                 return False
             
             # Check if station already exists
@@ -645,6 +675,12 @@ def save_station_from_docked(message, DATABASE_URL):
                 cursor.execute("UPDATE stations SET economies = %s::jsonb WHERE system_id64 = %s AND station_id = %s", 
                              (economies_json, system_id64, market_id))
                 log_message("STATION", f"Updated economies for station {station_name}", level=2)
+                
+                # Mark message processing as complete
+                if message_id and tracker:
+                    tracker.write(message_id)
+                    tracker.success(message_id, True, original_timestamp, original_timestamp, "stations")
+                
                 return True
             
             # Insert new station
@@ -652,34 +688,52 @@ def save_station_from_docked(message, DATABASE_URL):
                 INSERT INTO stations (
                     system_id64, station_id, station_name, station_type,
                     primary_economy, distance_to_arrival, landing_pad_size,
-                    update_time, economies, has_market, body
+                    update_time, economies, has_market, body, timestamp
                 ) VALUES (
                     %s, %s, %s, %s,
                     %s, %s, %s,
-                    %s, %s::jsonb, %s, %s
+                    %s, %s::jsonb, %s, %s, %s
                 )
                 RETURNING station_id
             """, (
                 system_id64, market_id, station_name, station_type,
                 primary_economy, distance_to_arrival, landing_pad_size,
-                current_timestamp, economies_json, has_market, body
+                current_timestamp, economies_json, has_market, body, original_timestamp
             ))
             
             result = cursor.fetchone()
             if result:
                 log_message("STATION", f"✓ Successfully saved new station {station_name} (ID: {market_id}) in system {system_id64}", level=1)
+                
+                # Mark message processing as complete with timestamp verification
+                if message_id and tracker:
+                    tracker.write(message_id)
+                    tracker.success(message_id, True, original_timestamp, original_timestamp, "stations")
+                
                 return True
             else:
                 log_message("ERROR", f"Failed to save station {station_name}", level=1)
+                
+                # Mark message processing as failed
+                if message_id and tracker:
+                    tracker.write(message_id)
+                    tracker.success(message_id, False)
+                
                 return False
                 
     except Exception as e:
         log_message("ERROR", f"Database error saving station: {str(e)}", level=1)
         import traceback
         log_message("ERROR", f"Traceback: {traceback.format_exc()}", level=1)
+        
+        # Mark message processing as failed
+        if message_id and tracker:
+            tracker.write(message_id)
+            tracker.success(message_id, False)
+        
         return False
 
-def update_station_body_from_location(message, DATABASE_URL):
+def update_station_body_from_location(message, DATABASE_URL, message_id=None):
     """
     Minimal function to update a station's body data from Location event
     Updates the body field ONLY IF it is currently NULL in the database
@@ -688,6 +742,7 @@ def update_station_body_from_location(message, DATABASE_URL):
     Args:
         message (dict): Location event data (from section 4.12 in Journal Manual)
         DATABASE_URL (str): Database connection string
+        message_id (int, optional): Message ID for tracking
         
     Returns:
         bool: True if body was updated, False otherwise
@@ -734,29 +789,45 @@ def update_station_body_from_location(message, DATABASE_URL):
                 
                 if cursor.rowcount > 0:
                     log_message("STATION", f"✓ Updated body to '{body}' for station {station_name} in system {system_id64}", level=1)
+                    
+                    # Mark message processing as complete
+                    if message_id and tracker:
+                        tracker.write(message_id)
+                        tracker.success(message_id, True)
+                    
                     return True
                     
             # No update was needed or station wasn't found
+            if message_id and tracker:
+                tracker.write(message_id)
+                tracker.success(message_id, True)  # No update needed is still success
+            
             return False
             
     except Exception as e:
         log_message("ERROR", f"Database error updating station body: {str(e)}", level=1)
+        
+        # Mark message processing as failed
+        if message_id and tracker:
+            tracker.write(message_id)
+            tracker.success(message_id, False)
+        
         return False
 
-def handle_system_factions(message, DATABASE_URL):
+def handle_system_factions(message, DATABASE_URL, event_type):
     """Process faction data from FSDJump and Location events
     
     Args:
         message (dict): FSDJump or Location event data
         DATABASE_URL (str): Database connection string
+        event_type (str): Event type ("FSDJump" or "Location")
         
     Returns:
         bool: True if factions were processed, False otherwise
     """
     try:
         # Only process FSDJump or Location events
-        event = message.get("event", "")
-        if event not in ["FSDJump", "Location"]:
+        if event_type not in ["FSDJump", "Location"]:
             return False
 
         # Extract required fields
@@ -764,18 +835,18 @@ def handle_system_factions(message, DATABASE_URL):
         system_id64 = message.get("SystemAddress")
         
         if not system_name or not system_id64:
-            log_message("FACTION", f"Missing system info in {event} event - Name: {system_name}, ID64: {system_id64}", level=2)
+            log_message("FACTION", f"Missing system info in {event_type} event - Name: {system_name}, ID64: {system_id64}", level=2)
             return False
             
         # Extract system faction (controlling faction)
         system_faction_data = message.get("SystemFaction")
         if not system_faction_data or not isinstance(system_faction_data, dict):
-            log_message("FACTION", f"No SystemFaction data in {event} event for system {system_name}", level=2)
+            log_message("FACTION", f"No SystemFaction data in {event_type} event for system {system_name}", level=2)
             return False
             
         controlling_faction = system_faction_data.get("Name")
         if not controlling_faction:
-            log_message("FACTION", f"No controlling faction name in {event} event for system {system_name}", level=2)
+            log_message("FACTION", f"No controlling faction name in {event_type} event for system {system_name}", level=2)
             return False
             
         log_message("FACTION", f"Processing factions for {system_name} (Controlling: {controlling_faction})", level=2)
@@ -783,7 +854,7 @@ def handle_system_factions(message, DATABASE_URL):
         # Get all factions data
         factions = message.get("Factions", [])
         if not factions:
-            log_message("FACTION", f"No Factions data in {event} event for system {system_name}", level=2)
+            log_message("FACTION", f"No Factions data in {event_type} event for system {system_name}", level=2)
             return False
             
         # Store entire factions array as JSONB
@@ -816,14 +887,13 @@ def handle_system_factions(message, DATABASE_URL):
                     UPDATE systems
                     SET controlling_faction = %s,
                         active_states = %s::jsonb,
-                        all_factions = %s::jsonb,
-                        last_updated = %s
+                        all_factions = %s::jsonb
                     WHERE id64 = %s
                     RETURNING id64
-                """, (controlling_faction, active_states_json, all_factions_json, current_timestamp, system_id64))
+                """, (controlling_faction, active_states_json, all_factions_json, system_id64))
                 
                 if cursor.rowcount > 0:
-                    log_message("FACTION", f"✓ Updated faction data for {system_name} from {event} event: controlling={controlling_faction}, states={active_states}", level=1)
+                    log_message("FACTION", f"✓ Updated faction data for {system_name} from {event_type} event: controlling={controlling_faction}, states={active_states}", level=1)
                     return True
                 else:
                     log_message("FACTION", f"System {system_name} not found in database", level=2)

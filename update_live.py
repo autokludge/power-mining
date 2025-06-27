@@ -5,6 +5,7 @@ import zlib
 import time
 import signal
 import argparse
+import threading
 from datetime import datetime, timezone, timedelta
 import csv
 import msgspec
@@ -22,8 +23,11 @@ from utils.update_functions import (
     update_station_body_from_location,
     handle_system_factions
 )
-from utils.update_log import log_message, format_tag, set_debug_level, ICONS, DEBUG_LEVEL, YELLOW, BLUE, MAGENTA, RED, CYAN, ORANGE, GREEN, RESET
-from utils.update_powers import update_power_history
+from utils.update_log import (
+    log_message, format_tag, set_debug_level, ICONS, DEBUG_LEVEL, YELLOW, BLUE, MAGENTA, RED, CYAN, ORANGE, GREEN, RESET,
+    convert_eddn_timestamp_to_db, set_tracker, tracker
+)
+from utils.update_powers import route_power_data
 
 # Constants
 DATABASE_URL = None  # Will be set from args or env in main()
@@ -135,174 +139,191 @@ def load_commodity_map():
     log_message("INIT", f"Loaded {len(commodity_map)} commodities from CSV (mapping EDDN ID -> local name)", level=2)
     return commodity_map, reverse_map
 
-def flush_commodities_to_db(conn, commodity_buffer, auto_commit=False):
+def flush_commodities_to_db(DATABASE_URL, commodity_buffer, auto_commit=False):
     """Write buffered commodities to database"""
     if not commodity_buffer:
         log_message("DATABASE", "No commodities in buffer to write", level=2)
         return 0, 0
 
-    cursor = conn.cursor()
     total_commodities = 0
     stations_processed = 0
     total_stations = len(commodity_buffer)
+    failed_stations = []
 
     try:
         log_message("DATABASE", f"Writing to Database starting... ({total_stations} stations to process)", level=1)
         
-        # Process each station's commodities
-        for (system_id64, station_name), (new_map, eddn_timestamp) in commodity_buffer.items():
-            try:
-                stations_processed += 1
-                
-                # Start transaction for this station
-                cursor.execute("BEGIN")
-                
-                # Get station info using both system_id64 and station_name with row lock
-                cursor.execute("""
-                    SELECT station_id
-                    FROM stations
-                    WHERE system_id64 = %s AND station_name = %s
-                    FOR UPDATE
-                """, (system_id64, station_name))
-                row = cursor.fetchone()
-                if not row:
-                    log_message("ERROR", f"Station not found in database: {station_name} in system {system_id64}", level=1)
-                    cursor.execute("ROLLBACK")
-                    continue
-                    
-                station_id = row[0]
-                log_message("DATABASE", f"Processing station {station_name} ({len(new_map)} commodities)", level=2)
-                
-                # Delete existing commodities using proper primary key
+        with psycopg2.connect(DATABASE_URL) as conn:
+            cursor = conn.cursor()
+            
+            # Process each station's commodities
+            for (system_id64, station_name), (new_map, eddn_timestamp) in commodity_buffer.items():
                 try:
+                    stations_processed += 1
+                    
+                    # Start transaction for this station
+                    cursor.execute("BEGIN")
+                    
+                    # Get station info using both system_id64 and station_name with row lock
                     cursor.execute("""
-                        DELETE FROM station_commodities_mapped 
+                        SELECT station_id
+                        FROM stations
                         WHERE system_id64 = %s AND station_name = %s
+                        FOR UPDATE
                     """, (system_id64, station_name))
-                    rows_deleted = cursor.rowcount
-                    log_message("DATABASE", f"Deleted {rows_deleted} existing commodities for {station_name}", level=2)
-                except Exception as e:
-                    log_message("ERROR", f"Failed to delete existing commodities for {station_name}: {str(e)}", level=1)
-                    cursor.execute("ROLLBACK")
-                    continue
-                
-                # Insert new commodities with improved error handling
-                try:
-                    # Get commodity ID mapping once
-                    commodity_ids = get_commodity_ids(conn)
-                    
-                    # In the insert section, change only the data preparation:
-                    commodity_data = [(system_id64, station_id, station_name, commodity_ids[commodity_name], data[0], data[1]) 
-                                    for commodity_name, data in new_map.items()]
-                    
-                    # Validate data before insert
-                    for data in commodity_data:
-                        if None in data:
-                            raise ValueError(f"Invalid commodity data: {data}")
-                    
-                    cursor.executemany("""
-                        INSERT INTO station_commodities_mapped 
-                            (system_id64, station_id, station_name, commodity_id, sell_price, demand)
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (system_id64, station_id, commodity_id) 
-                        DO UPDATE SET 
-                            station_name = EXCLUDED.station_name,
-                            sell_price = EXCLUDED.sell_price,
-                            demand = EXCLUDED.demand
-                    """, commodity_data)
-                    rows_affected = cursor.rowcount
-
-                    log_message("DATABASE", f"Inserted/Updated {rows_affected} commodities for {station_name} (expected {len(new_map)})", level=2)
-                    
-                    # Verify no duplicates were created
-                    cursor.execute("""
-                        SELECT COUNT(*), COUNT(DISTINCT (system_id64, station_id, commodity_id))
-                        FROM station_commodities_mapped
-                        WHERE system_id64 = %s AND station_id = %s
-                    """, (system_id64, station_id))
-                    total, distinct = cursor.fetchone()
-                    if total != distinct:
-                        raise Exception(f"Duplicate entries detected: {total} total vs {distinct} distinct")
+                    row = cursor.fetchone()
+                    if not row:
+                        error_msg = f"Station not found in database: {station_name} in system {system_id64}"
+                        log_message("ERROR", error_msg, level=1)
+                        failed_stations.append((station_name, "Station not found"))
+                        cursor.execute("ROLLBACK")
+                        continue
                         
-                except Exception as e:
-                    log_message("ERROR", f"Failed to insert commodities for {station_name}: {str(e)}", level=1)
-                    cursor.execute("ROLLBACK")
-                    continue
-                
-                # Update station timestamp using EDDN timestamp
-                try:
-                    # Parse EDDN timestamp (format: "2025-01-11T01:19:39Z")
-                    # Convert to database format (timestamp without time zone)
-                    try:
-                        dt = datetime.strptime(eddn_timestamp, "%Y-%m-%dT%H:%M:%SZ")
-                        db_timestamp = dt.strftime("%Y-%m-%d %H:%M:%S")
-                        log_message("DEBUG", f"Converting EDDN timestamp '{eddn_timestamp}' to DB format '{db_timestamp}'", level=3)
-                    except ValueError as e:
-                        log_message("ERROR", f"Failed to parse EDDN timestamp '{eddn_timestamp}': {str(e)}", level=1)
-                        cursor.execute("ROLLBACK")
-                        continue
-
-                    cursor.execute("""
-                        UPDATE stations
-                        SET update_time = %s
-                        WHERE system_id64 = %s AND station_id = %s
-                        RETURNING update_time
-                    """, (db_timestamp, system_id64, station_id))
+                    station_id = row[0]
+                    log_message("DATABASE", f"Processing station {station_name} ({len(new_map)} commodities)", level=2)
                     
-                    rows_updated = cursor.rowcount
-                    if rows_updated == 0:
-                        log_message("ERROR", f"Failed to update timestamp for {station_name} - no rows affected (timestamp: {db_timestamp})", level=1)
+                    # Delete existing commodities using proper primary key
+                    try:
+                        cursor.execute("""
+                            DELETE FROM station_commodities_mapped 
+                            WHERE system_id64 = %s AND station_name = %s
+                        """, (system_id64, station_name))
+                        rows_deleted = cursor.rowcount
+                        log_message("DATABASE", f"Deleted {rows_deleted} existing commodities for {station_name}", level=2)
+                    except Exception as e:
+                        error_msg = f"Failed to delete existing commodities: {str(e)}"
+                        log_message("ERROR", f"Failed to delete existing commodities for {station_name}: {str(e)}", level=1)
+                        failed_stations.append((station_name, error_msg))
                         cursor.execute("ROLLBACK")
                         continue
-                    else:
-                        updated_time = cursor.fetchone()[0]
-                        log_message("DATABASE", f"Updated timestamp for {station_name} from EDDN time '{eddn_timestamp}' to DB time '{updated_time}' (rows affected: {rows_updated})", level=2)
+                    
+                    # Insert new commodities with improved error handling
+                    try:
+                        # Get commodity ID mapping once
+                        commodity_ids = get_commodity_ids(conn)
+                        
+                        # In the insert section, change only the data preparation:
+                        commodity_data = [(system_id64, station_id, station_name, commodity_ids[commodity_name], data[0], data[1]) 
+                                        for commodity_name, data in new_map.items()]
+                        
+                        # Validate data before insert
+                        for data in commodity_data:
+                            if None in data:
+                                raise ValueError(f"Invalid commodity data: {data}")
+                        
+                        cursor.executemany("""
+                            INSERT INTO station_commodities_mapped 
+                                (system_id64, station_id, station_name, commodity_id, sell_price, demand)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (system_id64, station_id, commodity_id) 
+                            DO UPDATE SET 
+                                station_name = EXCLUDED.station_name,
+                                sell_price = EXCLUDED.sell_price,
+                                demand = EXCLUDED.demand
+                        """, commodity_data)
+                        rows_affected = cursor.rowcount
+
+                        log_message("DATABASE", f"Inserted/Updated {rows_affected} commodities for {station_name} (expected {len(new_map)})", level=2)
+                        
+                        # Verify no duplicates were created
+                        cursor.execute("""
+                            SELECT COUNT(*), COUNT(DISTINCT (system_id64, station_id, commodity_id))
+                            FROM station_commodities_mapped
+                            WHERE system_id64 = %s AND station_id = %s
+                        """, (system_id64, station_id))
+                        total, distinct = cursor.fetchone()
+                        if total != distinct:
+                            raise Exception(f"Duplicate entries detected: {total} total vs {distinct} distinct")
+                            
+                    except Exception as e:
+                        error_msg = f"Failed to insert commodities: {str(e)}"
+                        log_message("ERROR", f"Failed to insert commodities for {station_name}: {str(e)}", level=1)
+                        failed_stations.append((station_name, error_msg))
+                        cursor.execute("ROLLBACK")
+                        continue
+                    
+                    # Update station timestamp using EDDN timestamp
+                    try:
+                        # Parse EDDN timestamp (format: "2025-01-11T01:19:39Z")
+                        # Convert to database format (timestamp without time zone)
+                        try:
+                            dt = datetime.strptime(eddn_timestamp, "%Y-%m-%dT%H:%M:%SZ")
+                            db_timestamp = dt.strftime("%Y-%m-%d %H:%M:%S")
+                            log_message("DEBUG", f"Converting EDDN timestamp '{eddn_timestamp}' to DB format '{db_timestamp}'", level=3)
+                        except ValueError as e:
+                            error_msg = f"Failed to parse timestamp: {str(e)}"
+                            log_message("ERROR", f"Failed to parse EDDN timestamp '{eddn_timestamp}': {str(e)}", level=1)
+                            failed_stations.append((station_name, error_msg))
+                            cursor.execute("ROLLBACK")
+                            continue
+
+                        cursor.execute("""
+                            UPDATE stations
+                            SET update_time = %s, timestamp = %s
+                            WHERE system_id64 = %s AND station_id = %s
+                            RETURNING update_time
+                        """, (db_timestamp, eddn_timestamp, system_id64, station_id))
+                        
+                        rows_updated = cursor.rowcount
+                        if rows_updated == 0:
+                            error_msg = f"Failed to update timestamp - no rows affected"
+                            log_message("ERROR", f"Failed to update timestamp for {station_name} - no rows affected (timestamp: {db_timestamp})", level=1)
+                            failed_stations.append((station_name, error_msg))
+                            cursor.execute("ROLLBACK")
+                            continue
+                        else:
+                            updated_time = cursor.fetchone()[0]
+                            log_message("DATABASE", f"Updated timestamp for {station_name} from EDDN time '{eddn_timestamp}' to DB time '{updated_time}' (rows affected: {rows_updated})", level=2)
+                    except Exception as e:
+                        error_msg = f"Failed to update timestamp: {str(e)}"
+                        log_message("ERROR", f"Failed to update timestamp for {station_name}: {str(e)}", level=1)
+                        failed_stations.append((station_name, error_msg))
+                        cursor.execute("ROLLBACK")
+                        continue
+                    
+                    # Commit transaction for this station
+                    cursor.execute("COMMIT")
+                    total_commodities += len(new_map)
+                    
+                    # Log progress every 10 stations
+                    if stations_processed % 10 == 0:
+                        log_message("DATABASE", f"Progress: {stations_processed}/{total_stations} stations processed", level=2)
+
                 except Exception as e:
-                    log_message("ERROR", f"Failed to update timestamp for {station_name}: {str(e)}", level=1)
-                    cursor.execute("ROLLBACK")
+                    error_msg = f"Unexpected error: {str(e)}"
+                    log_message("ERROR", f"Failed to process station {station_name}: {str(e)}", level=1)
+                    failed_stations.append((station_name, error_msg))
+                    try:
+                        cursor.execute("ROLLBACK")
+                    except:
+                        pass
                     continue
-                
-                # Commit transaction for this station
-                cursor.execute("COMMIT")
-                total_commodities += len(new_map)
-                
-                # Log progress every 10 stations
-                if stations_processed % 10 == 0:
-                    log_message("DATABASE", f"Progress: {stations_processed}/{total_stations} stations processed", level=2)
 
-            except Exception as e:
-                log_message("ERROR", f"Failed to process station {station_name}: {str(e)}", level=1)
-                try:
-                    cursor.execute("ROLLBACK")
-                except:
-                    pass
-                continue
-
-        log_message("DATABASE", f"✓ Successfully updated {stations_processed} stations with {total_commodities} commodities", level=1)
-        
+            # Calculate successful stations
+            successful_stations = stations_processed - len(failed_stations)
+            
+            # Final status report
+            log_message("DATABASE", f"✓ Flush complete: {successful_stations}/{total_stations} stations succeeded, {total_commodities} commodities updated", level=1)
+            
+            if failed_stations:
+                log_message("ERROR", f"✗ {len(failed_stations)} stations failed:", level=1)
+                for station_name, error in failed_stations:
+                    log_message("ERROR", f"  - {station_name}: {error}", level=1)
+            
     except Exception as e:
         log_message("ERROR", f"Database error: {str(e)}", level=1)
-        try:
-            cursor.execute("ROLLBACK")
-        except:
-            pass
         return 0, 0
         
-    finally:
-        cursor.close()
-        commodity_buffer.clear()
-        
-    return stations_processed, total_commodities
+    return successful_stations, total_commodities
 
-def handle_power_data(message):
-    """Process all power data from FSDJump events"""
-    # Only process FSDJump events
-    event = message.get("event", "")
-    if event != "FSDJump":
+def handle_power_data(message, event_type):
+    """Process all power data from FSDJump and Location events"""
+    # Process FSDJump and Location events
+    if event_type not in ["FSDJump", "Location"]:
         return
 
-    # Log that we found a FSDJump event
-    log_message("POWER", ORANGE + f"Processing {event} event", level=2)
+    # Log that we found a FSDJump or Location event
+    log_message("POWER", ORANGE + f"Processing {event_type} event", level=2)
 
     # Get system info
     system_name = message.get("StarSystem", "")
@@ -323,6 +344,10 @@ def handle_power_data(message):
     try:
         with psycopg2.connect(DATABASE_URL) as conn:
             cur = conn.cursor()
+            
+            # Lock the row to prevent conflicts with other functions
+            cur.execute("SELECT id64 FROM systems WHERE id64 = %s FOR UPDATE", (system_id64,))
+            
             cur.execute("""
                 SELECT controlling_power, power_state, powers_acquiring
                 FROM systems
@@ -384,12 +409,13 @@ def handle_power_data(message):
             if powers_changed:
                 changes.append(f"powers_acquiring: {current_powers} -> {powers}")
             
-            # Get current timestamp
-            current_timestamp = datetime.now(timezone.utc)
+            # Get both original and converted timestamps
+            original_timestamp = message.get("timestamp")
+            current_timestamp = convert_eddn_timestamp_to_db(original_timestamp)
             
-            # Always update controlling_power, power_state, and last_updated
-            update_fields = ["controlling_power = %s", "power_state = %s", "last_updated = %s"]
-            params = [controlling_power, power_state, current_timestamp]
+            # Always update controlling_power, power_state, last_updated, and timestamp
+            update_fields = ["controlling_power = %s", "power_state = %s", "last_updated = %s", "timestamp = %s"]
+            params = [controlling_power, power_state, current_timestamp, original_timestamp]
             
             # Only conditionally include powers_acquiring if it changed
             if powers_changed:
@@ -436,20 +462,15 @@ def handle_power_data(message):
                 if updated_timestamp:
                     log_message("POWER", MAGENTA + f"System {system_name} last_updated timestamp set to: {updated_timestamp}", level=2)
                 
-                # Update power history with the same transaction
-                # if controlling_power is not None or powers or control_progress is not None or power_reinforcement is not None or power_undermining is not None:
-                #     log_message("POWER", MAGENTA + f"Calling update_power_history from handle_power_data", level=2)
-                #     update_power_history(
-                #         conn=conn,
-                #         system_id64=system_id64,
-                #         system_name=system_name,
-                #         controlling_power=controlling_power,
-                #         powers=powers,
-                #         control_progress=control_progress,
-                #         power_reinforcement=power_reinforcement,
-                #         power_undermining=power_undermining,
-                #         power_state=power_state
-                #     )
+                # Route power data to appropriate table using new routing logic
+                log_message("POWER", MAGENTA + f"Routing power data for {system_name}", level=2)
+                route_power_data(
+                    conn=conn,
+                    system_id64=system_id64,
+                    system_name=system_name,
+                    message=message,
+                    timestamp=current_timestamp
+                )
                 
                 conn.commit()
             else:
@@ -503,40 +524,42 @@ def handle_system_state(data):
             db_state = row[0]
             log_message("STATE", GREEN + f"Comparing state: DB='{db_state}' vs Current='{current_state}'", level=2)
             
-            # Get the current timestamp
-            current_timestamp = datetime.now(timezone.utc)
+            # Get both original and converted timestamps
+            original_timestamp = data.get("timestamp")
+            current_timestamp = convert_eddn_timestamp_to_db(original_timestamp)
             
             # Update if states differ
             if db_state != current_state:
                 log_message("STATE", GREEN + f"Updating state from '{db_state}' to '{current_state}'", level=2)
                 cursor.execute("""
                     UPDATE systems 
-                    SET system_state = %s, last_updated = %s
+                    SET system_state = %s, last_updated = %s, timestamp = %s
                     WHERE id64 = %s
-                """, (current_state, current_timestamp, data['SystemAddress']))
+                """, (current_state, current_timestamp, original_timestamp, data['SystemAddress']))
                 conn.commit()
-                log_message("STATE", GREEN + f"Writing to database: system_state = '{current_state}', last_updated = '{current_timestamp}'", level=2)
-            else:
-                # Even if state hasn't changed, update the timestamp
-                cursor.execute("""
-                    UPDATE systems 
-                    SET last_updated = %s
-                    WHERE id64 = %s
-                """, (current_timestamp, data['SystemAddress']))
-                conn.commit()
-                log_message("STATE", GREEN + f"State unchanged but updated timestamp to {current_timestamp}", level=2)
+                log_message("STATE", GREEN + f"Writing to database: system_state = '{current_state}'", level=2)
+            # else:
+            #     # Even if state hasn't changed, update the timestamp
+            #     cursor.execute("""
+            #         UPDATE systems 
+            #         SET last_updated = %s
+            #         WHERE id64 = %s
+            #     """, (current_timestamp, data['SystemAddress']))
+            #     conn.commit()
+            #     log_message("STATE", GREEN + f"State unchanged but updated timestamp to {current_timestamp}", level=2)
                 
     except Exception as e:
         log_message("STATE", GREEN + f"Error updating system state: {str(e)}", level=1)
         import traceback
         log_message("STATE", GREEN + f"Traceback: {traceback.format_exc()}", level=1)
 
-def process_journal_message(message):
+def process_journal_message(message, message_id=None):
     """
     Process journal messages and route to appropriate handlers based on event type.
     
     Args:
         message (dict): Journal message from EDDN
+        message_id (int, optional): Message ID for tracking
         
     Returns:
         bool: True if message was processed successfully
@@ -558,33 +581,21 @@ def process_journal_message(message):
         
         # Route based on event type
         if event_type == 'FSDJump':
-            # First save/update the system data
-            save_system_from_fsdjump(msg_data, DATABASE_URL, max_distance=2000.0)
-            
-            # Process power data
-            handle_power_data(msg_data)
-            # Process system state
+            save_system_from_fsdjump(msg_data, DATABASE_URL, max_distance=2000.0, message_id=message_id)
+            handle_power_data(msg_data, event_type)
             handle_system_state(msg_data)
-            # Process faction data (new)
-            handle_system_factions(msg_data, DATABASE_URL)
+            handle_system_factions(msg_data, DATABASE_URL, event_type)
             return True
         # Process Location events with docked info to update station body
         elif event_type == 'Location':
-            # First save/update the system data (same as with FSDJump)
-            save_system_from_fsdjump(msg_data, DATABASE_URL, max_distance=2000.0)
-            
-            # Process faction data (new)
-            handle_system_factions(msg_data, DATABASE_URL)
-            
-            # Process power data from Location events too
-            handle_power_data(msg_data)
-            
-            # Process system state
+            save_system_from_fsdjump(msg_data, DATABASE_URL, max_distance=2000.0, message_id=message_id)   
+            handle_power_data(msg_data, event_type)           
             handle_system_state(msg_data)
+            handle_system_factions(msg_data, DATABASE_URL, event_type) 
             
             # If docked, update station body info if currently NULL
             if msg_data.get('Docked') == True:
-                update_station_body_from_location(msg_data, DATABASE_URL)
+                update_station_body_from_location(msg_data, DATABASE_URL, message_id=message_id)
             
             return True
         # Process colony ship events
@@ -592,7 +603,7 @@ def process_journal_message(message):
             # First check if this is a regular station docking event
             if event_type == 'Docked' and 'MarketID' in msg_data:
                 # Save the station data if not already in database
-                save_station_from_docked(msg_data, DATABASE_URL)
+                save_station_from_docked(msg_data, DATABASE_URL, message_id=message_id)
             
             # Call imported function directly with needed parameters for colony ships
             handle_colony_ship_event(msg_data, event_type, DATABASE_URL)
@@ -613,13 +624,14 @@ def process_journal_message(message):
         log_message("ERROR", f"Traceback: {traceback.format_exc()}", level=1)
         return False
 
-def process_commodity_message(message, commodity_map):
+def process_commodity_message(message, commodity_map, message_id=None):
     """
     Process commodity messages from EDDN.
     
     Args:
         message (dict): Commodity message from EDDN
         commodity_map (dict): Mapping of commodity IDs to names
+        message_id (int, optional): Message ID for tracking
         
     Returns:
         tuple: ((system_id64, station_name), (commodities, timestamp)) or (None, None) if no relevant data
@@ -693,6 +705,12 @@ def process_commodity_message(message, commodity_map):
             
         if station_commodities:
             log_message("COMMODITY", f"Added {len(station_commodities)} mining commodities to buffer for {station_name}", level=2)
+            
+            # Mark message processing as complete
+            if message_id and tracker:
+                tracker.write(message_id)
+                tracker.success(message_id, True)  # Processing succeeded
+                
             # Publish status update to indicate activity
             publish_status("running", datetime.now(timezone.utc))
             # Store timestamp and system_id64 with commodities
@@ -700,10 +718,20 @@ def process_commodity_message(message, commodity_map):
         else:
             log_message("DEBUG", f"No relevant commodities found at {station_name}", level=2)
             
+            # Mark message as processed but with no data
+            if message_id and tracker:
+                tracker.write(message_id)
+                tracker.success(message_id, True)  # Processing succeeded (no data is valid)
+            
     except Exception as e:
         log_message("ERROR", f"Error processing commodity message: {str(e)}", level=1)
         import traceback
         log_message("ERROR", f"Traceback: {traceback.format_exc()}", level=1)
+        
+        # Mark message as failed
+        if message_id and tracker:
+            tracker.write(message_id)
+            tracker.success(message_id, False)  # Processing failed
         
     return None, None
 
@@ -723,19 +751,51 @@ def router_process_message(data, commodity_map):
     try:
         # Extract schema and message data
         schema_ref = data.get("$schemaRef", "").lower()
+        msg_data = data.get("message", {})
         
         # Route based on schema
         if "journal" in schema_ref:
             # This is a journal event
-            #log_message("ROUTER", f"Routing journal message with schema: {schema_ref}", level=3)
-            result = process_journal_message(data)
+            event_type = msg_data.get("event")
+            if event_type in ["FSDJump", "Docked", "Location"]:
+                # Track journal messages for system/station events
+                if event_type == "FSDJump":
+                    # FSDJump updates systems
+                    system_name = msg_data.get("StarSystem", "Unknown")
+                    system_id64 = msg_data.get("SystemAddress", 0)
+                    message_id = tracker.add(data, event_type, "systems", system_name, system_id64) if tracker else None
+                elif event_type == "Docked":
+                    # Docked updates stations
+                    station_name = msg_data.get("StationName", "Unknown")
+                    market_id = msg_data.get("MarketID", 0)
+                    message_id = tracker.add(data, event_type, "stations", station_name, market_id) if tracker else None
+                elif event_type == "Location":
+                    # Location can update either systems or stations
+                    if msg_data.get("Docked"):
+                        # Docked at station
+                        station_name = msg_data.get("StationName", "Unknown")
+                        market_id = msg_data.get("MarketID", 0)
+                        message_id = tracker.add(data, event_type, "stations", station_name, market_id) if tracker else None
+                    else:
+                        # In space (system)
+                        system_name = msg_data.get("StarSystem", "Unknown")
+                        system_id64 = msg_data.get("SystemAddress", 0)
+                        message_id = tracker.add(data, event_type, "systems", system_name, system_id64) if tracker else None
+                else:
+                    message_id = None
+            else:
+                message_id = None
+                
+            result = process_journal_message(data, message_id)
             return "journal", result
             
         elif "commodity" in schema_ref:
             # This is a commodity event
-            #log_message("ROUTER", f"Routing commodity message with schema: {schema_ref}", level=3)
-            msg_data = data.get("message", {})
-            return "commodity", process_commodity_message(msg_data, commodity_map)
+            station_name = msg_data.get("stationName", "Unknown")
+            market_id = msg_data.get("marketId", 0)
+            message_id = tracker.add(data, "Commodity", "stations", station_name, market_id) if tracker else None
+            
+            return "commodity", process_commodity_message(msg_data, commodity_map, message_id)
             
         else:
             # Unknown schema
@@ -784,41 +844,42 @@ def main():
         # Connect to database with simple configuration
         conn_start = time.time()
         try:
-            conn = psycopg2.connect(DATABASE_URL)
-            conn.autocommit = False
-            
-            conn_time = time.time() - conn_start
-            log_message("DATABASE", f"Connected to database in {conn_time:.2f}s", level=1)
-            
-            # Log connection info
-            cursor = conn.cursor()
-            cursor.execute("SELECT version()")
-            version = cursor.fetchone()[0]
-            cursor.execute("SHOW server_version")
-            server_version = cursor.fetchone()[0]
-            cursor.execute("SHOW max_connections")
-            max_connections = cursor.fetchone()[0]
-            cursor.execute("SELECT count(*) FROM pg_stat_activity")
-            current_connections = cursor.fetchone()[0]
-            
-            log_message("DATABASE", f"PostgreSQL version: {version}", level=2)
-            log_message("DATABASE", f"Server version: {server_version}", level=2)
-            log_message("DATABASE", f"Connections: {current_connections}/{max_connections}", level=2)
-            
-            # Test tables
-            cursor.execute("SELECT COUNT(*) FROM systems")
-            systems_count = cursor.fetchone()[0]
-            cursor.execute("SELECT COUNT(*) FROM stations")
-            stations_count = cursor.fetchone()[0]
-            cursor.execute("SELECT COUNT(*) FROM station_commodities")
-            commodities_count = cursor.fetchone()[0]
-            
-            log_message("DATABASE", f"Database contains: {systems_count} systems, {stations_count} stations, {commodities_count} commodity records", level=2)
-            
-            cursor.close()
+            with psycopg2.connect(DATABASE_URL) as test_conn:
+                conn_time = time.time() - conn_start
+                log_message("DATABASE", f"Connected to database in {conn_time:.2f}s", level=1)
+                
+                # Log connection info
+                cursor = test_conn.cursor()
+                cursor.execute("SELECT version()")
+                version = cursor.fetchone()[0]
+                cursor.execute("SHOW server_version")
+                server_version = cursor.fetchone()[0]
+                cursor.execute("SHOW max_connections")
+                max_connections = cursor.fetchone()[0]
+                cursor.execute("SELECT count(*) FROM pg_stat_activity")
+                current_connections = cursor.fetchone()[0]
+                
+                log_message("DATABASE", f"PostgreSQL version: {version}", level=2)
+                log_message("DATABASE", f"Server version: {server_version}", level=2)
+                log_message("DATABASE", f"Connections: {current_connections}/{max_connections}", level=2)
+                
+                # Test tables
+                cursor.execute("SELECT COUNT(*) FROM systems")
+                systems_count = cursor.fetchone()[0]
+                cursor.execute("SELECT COUNT(*) FROM stations")
+                stations_count = cursor.fetchone()[0]
+                cursor.execute("SELECT COUNT(*) FROM station_commodities")
+                commodities_count = cursor.fetchone()[0]
+                
+                log_message("DATABASE", f"Database contains: {systems_count} systems, {stations_count} stations, {commodities_count} commodity records", level=2)
+                
         except Exception as e:
             log_message("ERROR", f"Database connection failed: {str(e)}", level=1)
             raise
+        
+        # Initialize message tracker
+        set_tracker(DATABASE_URL, enabled=True)
+        log_message("TRACK", "Message tracking initialized", level=1)
         
         publish_status("running")
         
@@ -885,13 +946,16 @@ def main():
                                 station_commodities, timestamp = commodity_data
                                 log_message("DATABASE", f"Station {station}: {len(station_commodities)} commodities buffered", level=2)
                             publish_status("updating", datetime.now(timezone.utc))
-                            stations, commodities = flush_commodities_to_db(conn, commodity_buffer)
-                            if stations > 0:
-                                db_operations += 1
-                                log_message("DATABASE", f"✓ Successfully updated {stations} stations with {commodities} commodities", level=1)
-                            else:
-                                db_errors += 1
-                                log_message("ERROR", "No stations were updated", level=1)
+                            
+                            # Copy buffer for background thread and clear main buffer
+                            buffer_copy = commodity_buffer.copy()
+                            commodity_buffer.clear()
+                            
+                            # Start flush in background thread
+                            flush_thread = threading.Thread(target=flush_commodities_to_db, args=(DATABASE_URL, buffer_copy))
+                            flush_thread.daemon = True
+                            flush_thread.start()
+                            
                             publish_status("running", datetime.now(timezone.utc))
                         else:
                             log_message("DATABASE", "No commodities in buffer to write", level=2)
@@ -906,7 +970,9 @@ def main():
         if commodity_buffer:
             log_message("DATABASE", "Writing to Database starting...", level=2)
             publish_status("updating", datetime.now(timezone.utc))
-            stations, commodities = flush_commodities_to_db(conn, commodity_buffer)
+            
+            # For final flush, do it synchronously to ensure completion before exit
+            stations, commodities = flush_commodities_to_db(DATABASE_URL, commodity_buffer)
             if stations > 0:
                 log_message("DATABASE", f"[DATABASE] Writing to Database finished. Updated {stations} stations, {commodities} commodities", level=1)
             publish_status("running", datetime.now(timezone.utc))
@@ -917,8 +983,6 @@ def main():
         return 1
         
     finally:
-        if 'conn' in locals():
-            conn.close()
         publish_status("offline")
         log_message("TERMINATED", "EDDN Update Service", level=1)
         
