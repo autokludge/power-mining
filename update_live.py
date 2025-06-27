@@ -140,7 +140,7 @@ def load_commodity_map():
     log_message("INIT", f"Loaded {len(commodity_map)} commodities from CSV (mapping EDDN ID -> local name)", level=2)
     return commodity_map, reverse_map
 
-def flush_commodities_to_db(DATABASE_URL, commodity_buffer, auto_commit=False):
+def flush_commodities_to_db(DATABASE_URL, commodity_buffer, auto_commit=False, tracker=None):
     """Write buffered commodities to database"""
     if not commodity_buffer:
         log_message("DATABASE", "No commodities in buffer to write", level=2)
@@ -602,7 +602,7 @@ def process_journal_message(message, message_id=None):
             system_id64 = msg_data.get("SystemAddress", 0)
             message_id = tracker.add(message, event_type, "systems", system_name, system_id64) if tracker else None
             
-            save_system_from_fsdjump(msg_data, DATABASE_URL, max_distance=2000.0, message_id=message_id)
+            save_system_from_fsdjump(msg_data, DATABASE_URL, max_distance=2000.0, message_id=message_id, tracker=tracker)
             handle_power_data(msg_data, event_type)
             handle_system_state(msg_data)
             handle_system_factions(msg_data, DATABASE_URL, event_type)
@@ -622,14 +622,14 @@ def process_journal_message(message, message_id=None):
                 system_id64 = msg_data.get("SystemAddress", 0)
                 message_id = tracker.add(message, event_type, "systems", system_name, system_id64) if tracker else None
             
-            save_system_from_fsdjump(msg_data, DATABASE_URL, max_distance=2000.0, message_id=message_id)   
+            save_system_from_fsdjump(msg_data, DATABASE_URL, max_distance=2000.0, message_id=message_id, tracker=tracker)   
             handle_power_data(msg_data, event_type)           
             handle_system_state(msg_data)
             handle_system_factions(msg_data, DATABASE_URL, event_type) 
             
             # If docked, update station body info if currently NULL
             if msg_data.get('Docked') == True:
-                update_station_body_from_location(msg_data, DATABASE_URL, message_id=message_id)
+                update_station_body_from_location(msg_data, DATABASE_URL, message_id=message_id, tracker=tracker)
             
             processed = True
             
@@ -642,7 +642,7 @@ def process_journal_message(message, message_id=None):
                 message_id = tracker.add(message, event_type, "stations", station_name, market_id) if tracker else None
                 
                 # Save the station data if not already in database
-                save_station_from_docked(msg_data, DATABASE_URL, message_id=message_id)
+                save_station_from_docked(msg_data, DATABASE_URL, message_id=message_id, tracker=tracker)
             
             # Call imported function directly with needed parameters for colony ships
             handle_colony_ship_event(msg_data, event_type, DATABASE_URL)
@@ -968,7 +968,7 @@ def main():
                         if commodity_buffer:
                             log_message("DATABASE", f"Writing to Database starting... ({len(commodity_buffer)} stations in buffer)", level=2)
                             for station, commodity_data in commodity_buffer.items():
-                                station_commodities, timestamp = commodity_data
+                                station_commodities, timestamp, message_id = commodity_data
                                 log_message("DATABASE", f"Station {station}: {len(station_commodities)} commodities buffered", level=2)
                             publish_status("updating", datetime.now(timezone.utc))
                             
@@ -977,7 +977,7 @@ def main():
                             commodity_buffer.clear()
                             
                             # Start flush in background thread
-                            flush_thread = threading.Thread(target=flush_commodities_to_db, args=(DATABASE_URL, buffer_copy))
+                            flush_thread = threading.Thread(target=flush_commodities_to_db, args=(DATABASE_URL, buffer_copy), kwargs={'tracker': tracker})
                             flush_thread.daemon = True
                             flush_thread.start()
                             
@@ -997,7 +997,7 @@ def main():
             publish_status("updating", datetime.now(timezone.utc))
             
             # For final flush, do it synchronously to ensure completion before exit
-            stations, commodities = flush_commodities_to_db(DATABASE_URL, commodity_buffer)
+            stations, commodities = flush_commodities_to_db(DATABASE_URL, commodity_buffer, tracker=tracker)
             if stations > 0:
                 log_message("DATABASE", f"[DATABASE] Writing to Database finished. Updated {stations} stations, {commodities} commodities", level=1)
             publish_status("running", datetime.now(timezone.utc))

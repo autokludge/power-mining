@@ -329,7 +329,7 @@ def handle_saa_signals(message, DATABASE_URL):
         log_message("ERROR", f"Traceback: {traceback.format_exc()}", level=1)
         return False
 
-def save_system_from_fsdjump(message, DATABASE_URL, max_distance=2000.0, message_id=None):
+def save_system_from_fsdjump(message, DATABASE_URL, max_distance=2000.0, message_id=None, tracker=None):
     """
     Save or update system data from an FSDJump event
     Only saves systems within the specified distance from Sol (in light years)
@@ -572,7 +572,7 @@ def transform_economy_data(economies_data):
         log_message("ERROR", f"Error transforming economy data: {str(e)}", level=1)
         return None
 
-def save_station_from_docked(message, DATABASE_URL, message_id=None):
+def save_station_from_docked(message, DATABASE_URL, message_id=None, tracker=None):
     """
     Save station data from a Docked event
     Only saves the station if:
@@ -734,7 +734,7 @@ def save_station_from_docked(message, DATABASE_URL, message_id=None):
         
         return False
 
-def update_station_body_from_location(message, DATABASE_URL, message_id=None):
+def update_station_body_from_location(message, DATABASE_URL, message_id=None, tracker=None):
     """
     Minimal function to update a station's body data from Location event
     Updates the body field ONLY IF it is currently NULL in the database
