@@ -136,19 +136,22 @@ class MessageTracker:
         
         Args:
             message_timestamp (str): Original EDDN message timestamp
-            db_timestamp (str): Database timestamp from new timestamp column
+            db_timestamp (str or datetime): Database timestamp from timestamp column
             
         Returns:
             bool: True if timestamps match (indicating successful processing)
         """
         try:
             if isinstance(db_timestamp, str):
+                # String comparison
                 result = message_timestamp == db_timestamp
-                log_message("TRACK", f"Timestamp verification: match={result}", level=3)
-                return result
             else:
-                log_message("TRACK", "Database timestamp should be string from timestamp column", level=2)
-                return False
+                # Convert datetime to EDDN string format for comparison
+                db_timestamp_str = db_timestamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+                result = message_timestamp == db_timestamp_str
+                
+            log_message("TRACK", f"Timestamp verification: match={result}", level=3)
+            return result
         except Exception as e:
             log_message("ERROR", f"Error verifying processing: {str(e)}", level=1)
             return False
