@@ -587,6 +587,11 @@ def process_journal_message(message, message_id=None):
         
         # Route based on event type
         if event_type == 'FSDJump':
+            # Track journal messages for system events - AFTER filtering
+            system_name = msg_data.get("StarSystem", "Unknown")
+            system_id64 = msg_data.get("SystemAddress", 0)
+            message_id = tracker.add(message, event_type, "systems", system_name, system_id64) if tracker else None
+            
             save_system_from_fsdjump(msg_data, DATABASE_URL, max_distance=2000.0, message_id=message_id)
             handle_power_data(msg_data, event_type)
             handle_system_state(msg_data)
@@ -594,6 +599,18 @@ def process_journal_message(message, message_id=None):
             return True
         # Process Location events with docked info to update station body
         elif event_type == 'Location':
+            # Track journal messages for system/station events - AFTER filtering
+            if msg_data.get("Docked"):
+                # Docked at station
+                station_name = msg_data.get("StationName", "Unknown")
+                market_id = msg_data.get("MarketID", 0)
+                message_id = tracker.add(message, event_type, "stations", station_name, market_id) if tracker else None
+            else:
+                # In space (system)
+                system_name = msg_data.get("StarSystem", "Unknown")
+                system_id64 = msg_data.get("SystemAddress", 0)
+                message_id = tracker.add(message, event_type, "systems", system_name, system_id64) if tracker else None
+            
             save_system_from_fsdjump(msg_data, DATABASE_URL, max_distance=2000.0, message_id=message_id)   
             handle_power_data(msg_data, event_type)           
             handle_system_state(msg_data)
@@ -606,8 +623,12 @@ def process_journal_message(message, message_id=None):
             return True
         # Process colony ship events
         elif event_type == 'Docked' or event_type == 'FSSSignalDiscovered':
-            # First check if this is a regular station docking event
+            # Track journal messages for station events - AFTER filtering
             if event_type == 'Docked' and 'MarketID' in msg_data:
+                station_name = msg_data.get("StationName", "Unknown")
+                market_id = msg_data.get("MarketID", 0)
+                message_id = tracker.add(message, event_type, "stations", station_name, market_id) if tracker else None
+                
                 # Save the station data if not already in database
                 save_station_from_docked(msg_data, DATABASE_URL, message_id=message_id)
             
@@ -630,7 +651,7 @@ def process_journal_message(message, message_id=None):
         log_message("ERROR", f"Traceback: {traceback.format_exc()}", level=1)
         return False
 
-def process_commodity_message(message, commodity_map, message_id=None):
+def process_commodity_message(message, commodity_map, full_message=None):
     """
     Process commodity messages from EDDN.
     
@@ -712,6 +733,9 @@ def process_commodity_message(message, commodity_map, message_id=None):
         if station_commodities:
             log_message("COMMODITY", f"Added {len(station_commodities)} mining commodities to buffer for {station_name}", level=2)
             
+            # Track commodity messages for station events - AFTER filtering shows we have data to process
+            message_id = tracker.add(full_message, "Commodity", "stations", station_name, market_id) if tracker and full_message else None
+            
             # Mark message processing as complete
             if message_id and tracker:
                 tracker.write(message_id)
@@ -724,20 +748,14 @@ def process_commodity_message(message, commodity_map, message_id=None):
         else:
             log_message("DEBUG", f"No relevant commodities found at {station_name}", level=2)
             
-            # Mark message as processed but with no data
-            if message_id and tracker:
-                tracker.write(message_id)
-                tracker.success(message_id, True)  # Processing succeeded (no data is valid)
+            # No tracking needed for messages with no relevant data
             
     except Exception as e:
         log_message("ERROR", f"Error processing commodity message: {str(e)}", level=1)
         import traceback
         log_message("ERROR", f"Traceback: {traceback.format_exc()}", level=1)
         
-        # Mark message as failed
-        if message_id and tracker:
-            tracker.write(message_id)
-            tracker.success(message_id, False)  # Processing failed
+        # No error tracking needed since we only track successful processing
         
     return None, None
 
@@ -764,32 +782,7 @@ def router_process_message(data, commodity_map):
             # This is a journal event
             event_type = msg_data.get("event")
             if event_type in ["FSDJump", "Docked", "Location"]:
-                # Track journal messages for system/station events
-                if event_type == "FSDJump":
-                    # FSDJump updates systems
-                    system_name = msg_data.get("StarSystem", "Unknown")
-                    system_id64 = msg_data.get("SystemAddress", 0)
- 
-                    message_id = tracker.add(data, event_type, "systems", system_name, system_id64) if tracker else None
-                elif event_type == "Docked":
-                    # Docked updates stations
-                    station_name = msg_data.get("StationName", "Unknown")
-                    market_id = msg_data.get("MarketID", 0)
-                    message_id = tracker.add(data, event_type, "stations", station_name, market_id) if tracker else None
-                elif event_type == "Location":
-                    # Location can update either systems or stations
-                    if msg_data.get("Docked"):
-                        # Docked at station
-                        station_name = msg_data.get("StationName", "Unknown")
-                        market_id = msg_data.get("MarketID", 0)
-                        message_id = tracker.add(data, event_type, "stations", station_name, market_id) if tracker else None
-                    else:
-                        # In space (system)
-                        system_name = msg_data.get("StarSystem", "Unknown")
-                        system_id64 = msg_data.get("SystemAddress", 0)
-                        message_id = tracker.add(data, event_type, "systems", system_name, system_id64) if tracker else None
-                else:
-                    message_id = None
+                message_id = None  # Will be set by processing functions if message is actually processed
             else:
                 message_id = None
                 
@@ -798,11 +791,7 @@ def router_process_message(data, commodity_map):
             
         elif "commodity" in schema_ref:
             # This is a commodity event
-            station_name = msg_data.get("stationName", "Unknown")
-            market_id = msg_data.get("marketId", 0)
-            message_id = tracker.add(data, "Commodity", "stations", station_name, market_id) if tracker else None
-            
-            return "commodity", process_commodity_message(msg_data, commodity_map, message_id)
+            return "commodity", process_commodity_message(msg_data, commodity_map, data)
             
         else:
             # Unknown schema

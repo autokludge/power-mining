@@ -324,7 +324,7 @@ def update_power_conflicts(conn, system_id64, system_name, conflict_progress_lis
         # Map power names to database column names
         power_name_mapping = {
             'Aisling Duval': 'aisling_duval',
-            'Arissa Lavigny-Duval': 'arissa_lavigny_duval',
+            'A. Lavigny-Duval': 'arissa_lavigny_duval',
             'Archon Delaine': 'archon_delaine',
             'Denton Patreus': 'denton_patreus',
             'Edmund Mahon': 'edmund_mahon',
