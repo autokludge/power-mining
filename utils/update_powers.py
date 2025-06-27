@@ -243,7 +243,7 @@ def update_power_history(conn, system_id64, system_name, controlling_power, powe
                 system_id64,
                 power_id,
                 power_state_int,
-                powers_acquiring if powers_acquiring else None,
+                powers_acquiring if powers_acquiring else [],
                 rounded_control_progress,  # Use the rounded value
                 trend,  # Already rounded above
                 power_reinforcement,
