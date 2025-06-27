@@ -617,6 +617,8 @@ def process_journal_message(message, message_id=None):
                     station_name = msg_data.get("StationName", "Unknown")
                     market_id = msg_data.get("MarketID", 0)
                     station_message_id = tracker.add(message, event_type, "stations", station_name, market_id)
+                    if station_message_id:
+                        tracker.write(station_message_id)
                     update_station_body_from_location(msg_data, DATABASE_URL, message_id=station_message_id, tracker=tracker)
                 else:
                     update_station_body_from_location(msg_data, DATABASE_URL, message_id=None, tracker=tracker)
