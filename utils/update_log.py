@@ -167,7 +167,10 @@ class MessageTracker:
             category (str, optional): Category for logging
         """
         if not message_id:
+            log_message("TRACK", "tracker.success called with None message_id", level=1)
             return
+            
+        log_message("TRACK", f"tracker.success called with message_id={message_id}", level=1)
             
         try:
             # Skip verification for now, just use the succeeded value
