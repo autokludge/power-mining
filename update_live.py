@@ -464,12 +464,17 @@ def handle_power_data(message, event_type):
                 
                 # Route power data to appropriate table using new routing logic
                 log_message("POWER", MAGENTA + f"Routing power data for {system_name}", level=2)
+                
+                # Convert string timestamp back to datetime for power calculations
+                from datetime import datetime, timezone
+                eddn_timestamp = datetime.strptime(original_timestamp, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                
                 route_power_data(
                     conn=conn,
                     system_id64=system_id64,
                     system_name=system_name,
                     message=message,
-                    timestamp=current_timestamp
+                    timestamp=eddn_timestamp
                 )
                 
                 conn.commit()
@@ -763,7 +768,7 @@ def router_process_message(data, commodity_map):
                     # FSDJump updates systems
                     system_name = msg_data.get("StarSystem", "Unknown")
                     system_id64 = msg_data.get("SystemAddress", 0)
-                    log_message("DEBUG", f"EDDN message keys: header={list(data.get('header', {}).keys())}, message={list(data.get('message', {}).keys())}", level=1)
+
                     message_id = tracker.add(data, event_type, "systems", system_name, system_id64) if tracker else None
                 elif event_type == "Docked":
                     # Docked updates stations
