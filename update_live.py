@@ -763,6 +763,7 @@ def router_process_message(data, commodity_map):
                     # FSDJump updates systems
                     system_name = msg_data.get("StarSystem", "Unknown")
                     system_id64 = msg_data.get("SystemAddress", 0)
+                    log_message("DEBUG", f"EDDN message keys: header={list(data.get('header', {}).keys())}, message={list(data.get('message', {}).keys())}", level=1)
                     message_id = tracker.add(data, event_type, "systems", system_name, system_id64) if tracker else None
                 elif event_type == "Docked":
                     # Docked updates stations
