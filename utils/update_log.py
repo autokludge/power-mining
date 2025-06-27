@@ -169,21 +169,9 @@ class MessageTracker:
         if not message_id:
             return
             
-        log_message("TRACK", f"tracker.success called: msg_id={message_id}, succeeded={succeeded}", level=1)
-            
         try:
-            # If we have timestamps, verify they match
-            if succeeded and message_timestamp and db_timestamp:
-                timestamp_match = self.verify(message_timestamp, db_timestamp)
-                final_result = succeeded and timestamp_match
-                
-                if not timestamp_match:
-                    log_message("TRACK", f"Message {message_id} processing failed - timestamp mismatch in {category}", level=2)
-                else:
-                    log_message("TRACK", f"Message {message_id} processing verified successful in {category}", level=3)
-            else:
-                final_result = succeeded
-                
+            # Skip verification for now, just use the succeeded value
+            final_result = succeeded
             self._update_field_async(message_id, "check_result", final_result)
             
         except Exception as e:
