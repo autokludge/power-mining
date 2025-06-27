@@ -189,7 +189,7 @@ class MessageTracker:
         """Parse gateway timestamp to datetime object"""
         try:
             if 'T' in gateway_timestamp and gateway_timestamp.endswith('Z'):
-                return datetime.strptime(gateway_timestamp, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                return datetime.strptime(gateway_timestamp, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
             else:
                 log_message("TRACK", f"Invalid gateway timestamp format: {gateway_timestamp}", level=2)
                 return None
