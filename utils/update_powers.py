@@ -238,6 +238,18 @@ def update_power_history(conn, system_id64, system_name, controlling_power, powe
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
+                ON CONFLICT (timestamp, system_id64) DO UPDATE SET
+                    power_id = EXCLUDED.power_id,
+                    power_state = EXCLUDED.power_state,
+                    powers_acquiring = EXCLUDED.powers_acquiring,
+                    control_progress = EXCLUDED.control_progress,
+                    trend = EXCLUDED.trend,
+                    power_reinforcement = EXCLUDED.power_reinforcement,
+                    power_undermining = EXCLUDED.power_undermining,
+                    control_points = EXCLUDED.control_points,
+                    cp_delta = EXCLUDED.cp_delta,
+                    state_percent = EXCLUDED.state_percent,
+                    trend_percent = EXCLUDED.trend_percent
             """, (
                 timestamp,
                 system_id64,
