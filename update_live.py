@@ -158,7 +158,7 @@ def flush_commodities_to_db(DATABASE_URL, commodity_buffer, auto_commit=False):
             cursor = conn.cursor()
             
             # Process each station's commodities
-            for (system_id64, station_name), (new_map, eddn_timestamp) in commodity_buffer.items():
+            for (system_id64, station_name), (new_map, eddn_timestamp, message_id) in commodity_buffer.items():
                 try:
                     stations_processed += 1
                     
@@ -275,6 +275,13 @@ def flush_commodities_to_db(DATABASE_URL, commodity_buffer, auto_commit=False):
                         else:
                             updated_time = cursor.fetchone()[0]
                             log_message("DATABASE", f"Updated timestamp for {station_name} from EDDN time '{eddn_timestamp}' to DB time '{updated_time}' (rows affected: {rows_updated})", level=2)
+                            
+                            # Track successful commodity processing
+                            if message_id and tracker:
+                                cursor.execute("SELECT timestamp FROM stations WHERE station_id = %s", (station_id,))
+                                db_result = cursor.fetchone()
+                                db_timestamp = db_result[0] if db_result else None
+                                tracker.success(message_id, True, eddn_timestamp, db_timestamp, "stations")
                     except Exception as e:
                         error_msg = f"Failed to update timestamp: {str(e)}"
                         log_message("ERROR", f"Failed to update timestamp for {station_name}: {str(e)}", level=1)
@@ -758,8 +765,8 @@ def process_commodity_message(message, commodity_map, full_message=None):
                 
             # Publish status update to indicate activity
             publish_status("running", datetime.now(timezone.utc))
-            # Store timestamp and system_id64 with commodities
-            return (system_id64, station_name), (station_commodities, timestamp)
+            # Store timestamp, message_id and system_id64 with commodities
+            return (system_id64, station_name), (station_commodities, timestamp, message_id)
         else:
             log_message("DEBUG", f"No relevant commodities found at {station_name}", level=2)
             
