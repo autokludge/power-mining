@@ -116,6 +116,8 @@ class MessageTracker:
             
         except Exception as e:
             log_message("ERROR", f"Error tracking message: {str(e)}", level=1)
+            import traceback
+            log_message("ERROR", f"Tracker traceback: {traceback.format_exc()}", level=1)
             return None
     
     def write(self, message_id):
