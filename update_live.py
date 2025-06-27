@@ -25,7 +25,7 @@ from utils.update_functions import (
 )
 from utils.update_log import (
     log_message, format_tag, set_debug_level, ICONS, DEBUG_LEVEL, YELLOW, BLUE, MAGENTA, RED, CYAN, ORANGE, GREEN, RESET,
-    convert_eddn_timestamp_to_db, set_tracker, tracker
+    convert_eddn_timestamp_to_db, MessageTracker
 )
 from utils.update_powers import route_power_data
 
@@ -47,6 +47,7 @@ running = True
 commodity_buffer = {}
 commodity_map = {}
 reverse_map = {}
+tracker = None
 
 # Global commodity ID mapping
 def get_commodity_ids(conn):
@@ -768,7 +769,7 @@ def router_process_message(data, commodity_map):
                     # FSDJump updates systems
                     system_name = msg_data.get("StarSystem", "Unknown")
                     system_id64 = msg_data.get("SystemAddress", 0)
-
+ 
                     message_id = tracker.add(data, event_type, "systems", system_name, system_id64) if tracker else None
                 elif event_type == "Docked":
                     # Docked updates stations
@@ -884,8 +885,9 @@ def main():
             raise
         
         # Initialize message tracker
+        global tracker
         try:
-            set_tracker(DATABASE_URL, enabled=True)
+            tracker = MessageTracker(DATABASE_URL, enabled=True)
             log_message("TRACK", "Message tracking initialized", level=1)
         except Exception as e:
             log_message("ERROR", f"MESSAGE TRACKER FAILED: {str(e)}", level=1)
