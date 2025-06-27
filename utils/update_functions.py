@@ -371,6 +371,8 @@ def save_system_from_fsdjump(message, DATABASE_URL, max_distance=2000.0, full_me
     if full_message and tracker:
         event_type = full_message.get("message", {}).get("event", "Unknown")
         message_id = tracker.add(full_message, event_type, "systems", system_name, system_id64)
+        if message_id:
+            tracker.write(message_id)
     
     # Extract political data
     controlling_power = message.get("ControllingPower")
@@ -610,6 +612,8 @@ def save_station_from_docked(message, DATABASE_URL, full_message=None, tracker=N
     if full_message and tracker:
         event_type = full_message.get("message", {}).get("event", "Unknown")
         message_id = tracker.add(full_message, event_type, "stations", station_name, market_id)
+        if message_id:
+            tracker.write(message_id)
     
     # Validate required fields
     if not all([station_name, market_id, system_id64]):
