@@ -169,6 +169,8 @@ class MessageTracker:
         if not message_id:
             return
             
+        log_message("TRACK", f"tracker.success called: msg_id={message_id}, succeeded={succeeded}", level=1)
+            
         try:
             # If we have timestamps, verify they match
             if succeeded and message_timestamp and db_timestamp:

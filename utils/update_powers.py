@@ -362,7 +362,7 @@ def update_power_conflicts(conn, system_id64, system_name, conflict_progress_lis
             log_message("CONFLICT", f"No valid conflict data for {system_name}", level=2)
             return False
         
-        # Insert the conflict record
+        # Insert the conflict record with UPSERT to handle duplicate timestamps
         cursor.execute("""
             INSERT INTO power_conflicts (
                 timestamp, 
@@ -383,6 +383,20 @@ def update_power_conflicts(conn, system_id64, system_name, conflict_progress_lis
             ) VALUES (
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
             )
+            ON CONFLICT (timestamp, system_id64) DO UPDATE SET
+                power_state = EXCLUDED.power_state,
+                aisling_duval = EXCLUDED.aisling_duval,
+                arissa_lavigny_duval = EXCLUDED.arissa_lavigny_duval,
+                archon_delaine = EXCLUDED.archon_delaine,
+                denton_patreus = EXCLUDED.denton_patreus,
+                edmund_mahon = EXCLUDED.edmund_mahon,
+                felicia_winters = EXCLUDED.felicia_winters,
+                jerome_archer = EXCLUDED.jerome_archer,
+                li_yong_rui = EXCLUDED.li_yong_rui,
+                nakato_kaine = EXCLUDED.nakato_kaine,
+                pranav_antal = EXCLUDED.pranav_antal,
+                yuri_grom = EXCLUDED.yuri_grom,
+                zemina_torval = EXCLUDED.zemina_torval
         """, (
             timestamp,
             system_id64,
