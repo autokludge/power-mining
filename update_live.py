@@ -597,12 +597,7 @@ def process_journal_message(message, message_id=None):
         processed = False
         
         if event_type == 'FSDJump':
-            # Track journal messages for system events - AFTER filtering
-            system_name = msg_data.get("StarSystem", "Unknown")
-            system_id64 = msg_data.get("SystemAddress", 0)
-            message_id = tracker.add(message, event_type, "systems", system_name, system_id64) if tracker else None
-            
-            save_system_from_fsdjump(msg_data, DATABASE_URL, max_distance=2000.0, message_id=message_id, tracker=tracker)
+            save_system_from_fsdjump(msg_data, DATABASE_URL, max_distance=2000.0, full_message=message, tracker=tracker)
             handle_power_data(msg_data, event_type)
             handle_system_state(msg_data)
             handle_system_factions(msg_data, DATABASE_URL, event_type)
@@ -610,39 +605,29 @@ def process_journal_message(message, message_id=None):
             
         # Process Location events with docked info to update station body
         elif event_type == 'Location':
-            # Track journal messages for system/station events - AFTER filtering
-            if msg_data.get("Docked"):
-                # Docked at station
-                station_name = msg_data.get("StationName", "Unknown")
-                market_id = msg_data.get("MarketID", 0)
-                message_id = tracker.add(message, event_type, "stations", station_name, market_id) if tracker else None
-            else:
-                # In space (system)
-                system_name = msg_data.get("StarSystem", "Unknown")
-                system_id64 = msg_data.get("SystemAddress", 0)
-                message_id = tracker.add(message, event_type, "systems", system_name, system_id64) if tracker else None
-            
-            save_system_from_fsdjump(msg_data, DATABASE_URL, max_distance=2000.0, message_id=message_id, tracker=tracker)   
+            save_system_from_fsdjump(msg_data, DATABASE_URL, max_distance=2000.0, full_message=message, tracker=tracker)   
             handle_power_data(msg_data, event_type)           
             handle_system_state(msg_data)
             handle_system_factions(msg_data, DATABASE_URL, event_type) 
             
             # If docked, update station body info if currently NULL
             if msg_data.get('Docked') == True:
-                update_station_body_from_location(msg_data, DATABASE_URL, message_id=message_id, tracker=tracker)
+                # Track station events separately for docked Location events
+                if tracker:
+                    station_name = msg_data.get("StationName", "Unknown")
+                    market_id = msg_data.get("MarketID", 0)
+                    station_message_id = tracker.add(message, event_type, "stations", station_name, market_id)
+                    update_station_body_from_location(msg_data, DATABASE_URL, message_id=station_message_id, tracker=tracker)
+                else:
+                    update_station_body_from_location(msg_data, DATABASE_URL, message_id=None, tracker=tracker)
             
             processed = True
             
         # Process colony ship events
         elif event_type == 'Docked' or event_type == 'FSSSignalDiscovered':
-            # Track journal messages for station events - AFTER filtering
             if event_type == 'Docked' and 'MarketID' in msg_data:
-                station_name = msg_data.get("StationName", "Unknown")
-                market_id = msg_data.get("MarketID", 0)
-                message_id = tracker.add(message, event_type, "stations", station_name, market_id) if tracker else None
-                
                 # Save the station data if not already in database
-                save_station_from_docked(msg_data, DATABASE_URL, message_id=message_id, tracker=tracker)
+                save_station_from_docked(msg_data, DATABASE_URL, full_message=message, tracker=tracker)
             
             # Call imported function directly with needed parameters for colony ships
             handle_colony_ship_event(msg_data, event_type, DATABASE_URL)

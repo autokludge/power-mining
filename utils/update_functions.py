@@ -329,7 +329,7 @@ def handle_saa_signals(message, DATABASE_URL):
         log_message("ERROR", f"Traceback: {traceback.format_exc()}", level=1)
         return False
 
-def save_system_from_fsdjump(message, DATABASE_URL, max_distance=2000.0, message_id=None, tracker=None):
+def save_system_from_fsdjump(message, DATABASE_URL, max_distance=2000.0, full_message=None, tracker=None):
     """
     Save or update system data from an FSDJump event
     Only saves systems within the specified distance from Sol (in light years)
@@ -365,6 +365,12 @@ def save_system_from_fsdjump(message, DATABASE_URL, max_distance=2000.0, message
     if distance_from_sol > max_distance:
         log_message("SYSTEM", f"Skipping system {system_name} at {distance_from_sol:.1f} ly (beyond {max_distance} ly limit)", level=2)
         return False
+    
+    # Track system processing AFTER distance filter passes
+    message_id = None
+    if full_message and tracker:
+        event_type = full_message.get("message", {}).get("event", "Unknown")
+        message_id = tracker.add(full_message, event_type, "systems", system_name, system_id64)
     
     # Extract political data
     controlling_power = message.get("ControllingPower")
@@ -572,7 +578,7 @@ def transform_economy_data(economies_data):
         log_message("ERROR", f"Error transforming economy data: {str(e)}", level=1)
         return None
 
-def save_station_from_docked(message, DATABASE_URL, message_id=None, tracker=None):
+def save_station_from_docked(message, DATABASE_URL, full_message=None, tracker=None):
     """
     Save station data from a Docked event
     Only saves the station if:
@@ -598,6 +604,12 @@ def save_station_from_docked(message, DATABASE_URL, message_id=None, tracker=Non
     if station_type == "FleetCarrier":
         log_message("STATION", f"Skipping Fleet Carrier {station_name}", level=2)
         return True
+    
+    # Track station processing AFTER Fleet Carrier filter passes
+    message_id = None
+    if full_message and tracker:
+        event_type = full_message.get("message", {}).get("event", "Unknown")
+        message_id = tracker.add(full_message, event_type, "stations", station_name, market_id)
     
     # Validate required fields
     if not all([station_name, market_id, system_id64]):
