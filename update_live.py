@@ -888,9 +888,10 @@ def main():
             set_tracker(DATABASE_URL, enabled=True)
             log_message("TRACK", "Message tracking initialized", level=1)
         except Exception as e:
-            log_message("ERROR", f"Failed to initialize message tracker: {str(e)}", level=1)
+            log_message("ERROR", f"MESSAGE TRACKER FAILED: {str(e)}", level=1)
             import traceback
-            log_message("ERROR", f"Tracker initialization traceback: {traceback.format_exc()}", level=1)
+            log_message("ERROR", f"Tracker error: {traceback.format_exc()}", level=1)
+            log_message("ERROR", "Continuing without message tracking...", level=1)
         
         publish_status("running")
         
