@@ -586,6 +586,9 @@ def process_journal_message(message, message_id=None):
         #log_message("JOURNAL", GREEN + f"Processing {event_type} event", level=2)
         
         # Route based on event type
+        message_id = None
+        processed = False
+        
         if event_type == 'FSDJump':
             # Track journal messages for system events - AFTER filtering
             system_name = msg_data.get("StarSystem", "Unknown")
@@ -596,7 +599,8 @@ def process_journal_message(message, message_id=None):
             handle_power_data(msg_data, event_type)
             handle_system_state(msg_data)
             handle_system_factions(msg_data, DATABASE_URL, event_type)
-            return True
+            processed = True
+            
         # Process Location events with docked info to update station body
         elif event_type == 'Location':
             # Track journal messages for system/station events - AFTER filtering
@@ -620,7 +624,8 @@ def process_journal_message(message, message_id=None):
             if msg_data.get('Docked') == True:
                 update_station_body_from_location(msg_data, DATABASE_URL, message_id=message_id)
             
-            return True
+            processed = True
+            
         # Process colony ship events
         elif event_type == 'Docked' or event_type == 'FSSSignalDiscovered':
             # Track journal messages for station events - AFTER filtering
@@ -634,16 +639,26 @@ def process_journal_message(message, message_id=None):
             
             # Call imported function directly with needed parameters for colony ships
             handle_colony_ship_event(msg_data, event_type, DATABASE_URL)
-            return True
+            processed = True
+            
         # Process signals events
         elif event_type == 'SAASignalsFound':
             # Call imported function directly with needed parameters
             handle_saa_signals(msg_data, DATABASE_URL)
-            return True
+            processed = True
+            
         else:
             # Unknown or unhandled event type
             #log_message("JOURNAL", GREEN + f"Unhandled event type: {event_type}", level=3)
-            return False
+            processed = False
+        
+        # Complete tracking for processed messages
+        if message_id and tracker and processed:
+            tracker.write(message_id)
+            # Success verification should be done by the individual handler functions
+            # that already have database connections open - not here with new connections
+            
+        return processed
             
     except Exception as e:
         log_message("ERROR", f"Error processing journal message: {str(e)}", level=1)
@@ -736,10 +751,10 @@ def process_commodity_message(message, commodity_map, full_message=None):
             # Track commodity messages for station events - AFTER filtering shows we have data to process
             message_id = tracker.add(full_message, "Commodity", "stations", station_name, market_id) if tracker and full_message else None
             
-            # Mark message processing as complete
+            # Mark message processing as started
             if message_id and tracker:
                 tracker.write(message_id)
-                tracker.success(message_id, True)  # Processing succeeded
+                # Success verification will happen after database flush completes
                 
             # Publish status update to indicate activity
             publish_status("running", datetime.now(timezone.utc))

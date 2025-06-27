@@ -500,10 +500,12 @@ def save_system_from_fsdjump(message, DATABASE_URL, max_distance=2000.0, message
             if result:
                 log_message("SYSTEM", f"✓ Successfully saved system {system_name}", level=1)
                 
-                # Mark message processing as complete with timestamp verification
+                # Verify the timestamp was actually written to database
                 if message_id and tracker:
-                    tracker.write(message_id)
-                    tracker.success(message_id, True, original_timestamp, original_timestamp, "systems")
+                    cursor.execute("SELECT timestamp FROM systems WHERE id64 = %s", (system_id64,))
+                    db_result = cursor.fetchone()
+                    db_timestamp = db_result[0] if db_result else None
+                    tracker.success(message_id, True, original_timestamp, db_timestamp, "systems")
                 
                 return True
             else:
@@ -511,7 +513,6 @@ def save_system_from_fsdjump(message, DATABASE_URL, max_distance=2000.0, message
                 
                 # Mark message processing as failed
                 if message_id and tracker:
-                    tracker.write(message_id)
                     tracker.success(message_id, False)
                 
                 return False
@@ -523,7 +524,6 @@ def save_system_from_fsdjump(message, DATABASE_URL, max_distance=2000.0, message
         
         # Mark message processing as failed
         if message_id and tracker:
-            tracker.write(message_id)
             tracker.success(message_id, False)
         
         return False
@@ -660,7 +660,6 @@ def save_station_from_docked(message, DATABASE_URL, message_id=None):
                 
                 # Mark message processing as failed
                 if message_id and tracker:
-                    tracker.write(message_id)
                     tracker.success(message_id, False)
                 
                 return False
@@ -676,10 +675,12 @@ def save_station_from_docked(message, DATABASE_URL, message_id=None):
                              (economies_json, system_id64, market_id))
                 log_message("STATION", f"Updated economies for station {station_name}", level=2)
                 
-                # Mark message processing as complete
+                # Verify the timestamp was actually written to database
                 if message_id and tracker:
-                    tracker.write(message_id)
-                    tracker.success(message_id, True, original_timestamp, original_timestamp, "stations")
+                    cursor.execute("SELECT timestamp FROM stations WHERE station_id = %s AND system_id64 = %s", (market_id, system_id64))
+                    db_result = cursor.fetchone()
+                    db_timestamp = db_result[0] if db_result else None
+                    tracker.success(message_id, True, original_timestamp, db_timestamp, "stations")
                 
                 return True
             
@@ -705,10 +706,12 @@ def save_station_from_docked(message, DATABASE_URL, message_id=None):
             if result:
                 log_message("STATION", f"✓ Successfully saved new station {station_name} (ID: {market_id}) in system {system_id64}", level=1)
                 
-                # Mark message processing as complete with timestamp verification
+                # Verify the timestamp was actually written to database
                 if message_id and tracker:
-                    tracker.write(message_id)
-                    tracker.success(message_id, True, original_timestamp, original_timestamp, "stations")
+                    cursor.execute("SELECT timestamp FROM stations WHERE station_id = %s AND system_id64 = %s", (market_id, system_id64))
+                    db_result = cursor.fetchone()
+                    db_timestamp = db_result[0] if db_result else None
+                    tracker.success(message_id, True, original_timestamp, db_timestamp, "stations")
                 
                 return True
             else:
@@ -716,7 +719,6 @@ def save_station_from_docked(message, DATABASE_URL, message_id=None):
                 
                 # Mark message processing as failed
                 if message_id and tracker:
-                    tracker.write(message_id)
                     tracker.success(message_id, False)
                 
                 return False
@@ -728,7 +730,6 @@ def save_station_from_docked(message, DATABASE_URL, message_id=None):
         
         # Mark message processing as failed
         if message_id and tracker:
-            tracker.write(message_id)
             tracker.success(message_id, False)
         
         return False
@@ -792,14 +793,12 @@ def update_station_body_from_location(message, DATABASE_URL, message_id=None):
                     
                     # Mark message processing as complete
                     if message_id and tracker:
-                        tracker.write(message_id)
                         tracker.success(message_id, True)
                     
                     return True
                     
             # No update was needed or station wasn't found
             if message_id and tracker:
-                tracker.write(message_id)
                 tracker.success(message_id, True)  # No update needed is still success
             
             return False
@@ -809,7 +808,6 @@ def update_station_body_from_location(message, DATABASE_URL, message_id=None):
         
         # Mark message processing as failed
         if message_id and tracker:
-            tracker.write(message_id)
             tracker.success(message_id, False)
         
         return False
