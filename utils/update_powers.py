@@ -100,16 +100,10 @@ def update_power_history(conn, system_id64, system_name, controlling_power, powe
         # Check if we should add a new record (prevent too frequent updates)
         should_update = True
         
-        # Calculate control points correctly using power_state context
+        # Calculate control points using ONLY the correct state-based method
         control_points = None
         
-        # Method 1: Direct calculation if we have reinforcement and undermining values
-        if power_reinforcement is not None and power_undermining is not None:
-            control_points = power_reinforcement - power_undermining
-            log_message("POWER", f"Control points calculated from R-U: {control_points}", level=3)
-        
-        # Method 2: Calculate from control_progress + power_state (the correct way)
-        elif control_progress is not None and power_state is not None:
+        if control_progress is not None and power_state is not None:
             # Get power_state integer value
             power_state_int = POWER_STATE_MAPPING.get(power_state, 0)
             
@@ -136,15 +130,7 @@ def update_power_history(conn, system_id64, system_name, controlling_power, powe
                 control_points = None  # Don't calculate bogus values
                 
             else:
-                # Unknown state, use control_progress as-is scaled to 120k
-                control_points = int(control_progress * 120000)
-                log_message("POWER", f"Control points calculated for unknown state {power_state}: {control_points}", level=3)
-        
-        # Method 3: Fallback when we have control_progress but no power_state
-        elif control_progress is not None:
-            # Without power_state context, assume acquisition/unoccupied context (120k scale)
-            control_points = int(control_progress * 120000)
-            log_message("POWER", f"Control points calculated without power_state context: {control_points}", level=3)
+                control_points = int(control_progress * 120000)  # Unknown state fallback
         
         # Calculate state_percent correctly based on current power_state
         state_percent = None
