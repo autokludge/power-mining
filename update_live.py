@@ -260,7 +260,7 @@ def flush_commodities_to_db(DATABASE_URL, commodity_buffer, auto_commit=False, t
 
                         cursor.execute("""
                             UPDATE stations
-                            SET update_time = %s, timestamp = %s
+                            SET update_time = %s, timestamp = %s, has_market = TRUE
                             WHERE system_id64 = %s AND station_id = %s
                             RETURNING update_time
                         """, (db_timestamp, eddn_timestamp, system_id64, station_id))

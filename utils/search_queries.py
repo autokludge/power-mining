@@ -1,4 +1,28 @@
 """SQL query templates for different search modes"""
+from utils.search_common import get_time_filter_sql
+
+def get_time_filter_cte(params):
+    """Get CTE that finds systems with recently updated stations
+
+    Returns:
+        tuple: (cte_sql, [param_values]) or ("", []) if filter disabled
+    """
+    time_filter_sql, time_params = get_time_filter_sql(params)
+
+    if not time_filter_sql:
+        return "", []  # No time filter, return empty
+
+    # Replace st. with stations. since we're not using an alias in this CTE
+    time_filter_sql = time_filter_sql.replace("st.", "stations.")
+
+    cte = """-- Step 0: Filter systems by station update time (if enabled)
+    recent_stations AS (
+        SELECT system_id64, station_id
+        FROM stations
+        WHERE """ + time_filter_sql + """
+    ),
+    """
+    return cte, time_params
 
 def get_base_cte():
     """Get the base Common Table Expression for system distance calculation"""
@@ -10,8 +34,12 @@ def get_base_cte():
     )
     """
 
-def get_station_cte():
-    """Get the Common Table Expression for filtering stations"""
+def get_station_cte(time_filter_sql=""):
+    """Get the Common Table Expression for filtering stations
+
+    Args:
+        time_filter_sql: Optional time filter SQL clause (e.g. "AND st.update_time >= ...")
+    """
     return """
     , relevant_stations AS (
         SELECT sc.system_id64, sc.station_name, sc.commodity_name, sc.sell_price, sc.demand
@@ -30,6 +58,7 @@ def get_station_cte():
             st.landing_pad_size = 'Unknown' OR  -- Always include Unknown
             st.landing_pad_size = %s  -- Match exact pad size
         )
+        """ + time_filter_sql + """
     )
     """
 
@@ -69,7 +98,7 @@ def get_main_joins():
     FROM relevant_systems s
     JOIN mineral_signals ms ON {join_condition}
     LEFT JOIN relevant_stations rs ON s.id64 = rs.system_id64
-    LEFT JOIN stations st ON s.id64 = st.system_id64 AND rs.station_name = st.station_name
+    LEFT JOIN stations st ON s.id64 = st.system_id64 AND st.station_name = rs.station_name
     """
 
 def get_order_by():
@@ -110,16 +139,21 @@ def get_ring_join_conditions(ring_type_filter, signal_type, valid_ring_types):
 def build_complete_query(params, coords, material, valid_ring_types, where_conditions, where_params):
     """Build complete query with all parameters"""
     rx, ry, rz = coords
-    
+
+    # Get time filter
+    time_filter_sql, time_filter_params = get_time_filter_sql(params)
+    if time_filter_sql:
+        time_filter_sql = " AND " + time_filter_sql
+
     # Get mineral conditions
     mineral_condition, join_params = get_ring_join_conditions(params['ring_type_filter'], params['signal_type'], valid_ring_types)
-    
+
     # Build query
     query = get_base_cte()
-    
+
     # Add station CTE if needed
     if params['min_demand'] > 0 or params['max_demand'] > 0 or (material and material['name']):
-        query += get_station_cte()
+        query += get_station_cte(time_filter_sql)
     
     query += get_main_select()
     query += get_main_joins().format(join_condition="s.id64 = ms.system_id64")
@@ -181,6 +215,9 @@ def build_complete_query(params, coords, material, valid_ring_types, where_condi
             params['landing_pad_size'],  # For Any case
             params['landing_pad_size']   # For exact pad size match
         ])
+        # Add time filter params if enabled
+        if time_filter_params:
+            query_params.extend(time_filter_params)
     
     query_params.extend(where_params)
     query_params.extend(join_params)
@@ -195,22 +232,27 @@ def build_complete_query(params, coords, material, valid_ring_types, where_condi
 def build_optimized_query(params, coords, material, valid_ring_types, where_conditions, where_params):
     """Build optimized query following specific filtering order"""
     rx, ry, rz = coords
-    
+
+    # Get time filter CTE (if enabled)
+    time_filter_cte, time_filter_params = get_time_filter_cte(params)
+
     # Get mineral conditions
     mineral_condition, join_params = get_ring_join_conditions(params['ring_type_filter'], params['signal_type'], valid_ring_types)
-    
+
     # Debug logging for initial conditions
     print("\nInitial conditions:")
     print("Where conditions:", where_conditions)
     print("Where params:", where_params)
     print("Mineral condition:", mineral_condition)
     print("Join params:", join_params)
-    print("Total initial params:", len(where_params) + len(join_params))
-    
+    print("Time filter params:", time_filter_params)
+    print("Total initial params:", len(where_params) + len(join_params) + len(time_filter_params))
+
     # Build query following the step-by-step filtering approach
     # Each CTE applies filters in a specific order for optimization
     query = """
-    WITH 
+    WITH
+    """ + time_filter_cte + """
     -- Step 1: Filter systems by distance, power, mining type
     mineable_systems AS (
         -- First get all valid mineable systems
@@ -221,6 +263,7 @@ def build_optimized_query(params, coords, material, valid_ring_types, where_cond
         """ + (" AND " + " AND ".join(where_conditions) if where_conditions else "") + """  -- Power filters
         """ + (" AND " + mineral_condition if mineral_condition else "") + """  -- Mining type validation
         """ + (""" AND s.system_state = ANY(%s::text[])""" if params['system_states'] != ["Any"] else "") + """  -- System state filter
+        """ + (" AND s.id64 IN (SELECT system_id64 FROM recent_stations)" if time_filter_cte else "") + """  -- Time filter
         """ + ("""AND ms.ring_type = %s""" if params['ring_type_filter'] not in ['Hotspots', 'Without Hotspots', 'All'] else "") + ("""
         AND ms.reserve_level = %s""" if params['reserve_level'] != 'All' else "") + """  -- Reserve level filter
     ),
@@ -234,7 +277,8 @@ def build_optimized_query(params, coords, material, valid_ring_types, where_cond
         SELECT ms.*, st.station_name, st.landing_pad_size, st.distance_to_arrival, st.station_type, st.update_time,
                sc.sell_price, sc.demand, sc.commodity_name
         FROM mineable_systems ms
-        LEFT JOIN stations st ON ms.id64 = st.system_id64
+        LEFT JOIN stations st ON ms.id64 = st.system_id64""" + ("""
+        INNER JOIN recent_stations rs ON st.system_id64 = rs.system_id64 AND st.station_id = rs.station_id""" if time_filter_cte else "") + """
         LEFT JOIN station_commodities sc ON ms.id64 = sc.system_id64 AND st.station_name = sc.station_name
         WHERE TRUE
         """ + ("""
@@ -311,12 +355,19 @@ ORDER BY s.system_rank,
          s.distance"""
     
     # Build parameters in exact order of usage in SQL
-    query_params = [
+    query_params = []
+
+    # Add time filter params FIRST (if enabled)
+    if time_filter_params:
+        query_params.extend(time_filter_params)
+
+    # Add distance params
+    query_params.extend([
         rx, ry, rz,  # Distance calculation
         rx, ry, rz,  # Distance filter
         params['max_dist']
-    ]
-    
+    ])
+
     # Add power params - only if we have them
     if where_params:
         query_params.extend(where_params)

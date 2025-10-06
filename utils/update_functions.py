@@ -691,10 +691,10 @@ def save_station_from_docked(message, DATABASE_URL, full_message=None, tracker=N
             station_result = cursor.fetchone()
             
             if station_result:
-                # Station already exists, update economies and return
-                cursor.execute("UPDATE stations SET economies = %s::jsonb WHERE system_id64 = %s AND station_id = %s", 
-                             (economies_json, system_id64, market_id))
-                log_message("STATION", f"Updated economies for station {station_name}", level=2)
+                # Station already exists, update economies and has_market status
+                cursor.execute("UPDATE stations SET economies = %s::jsonb, has_market = %s WHERE system_id64 = %s AND station_id = %s", 
+                             (economies_json, has_market, system_id64, market_id))
+                log_message("STATION", f"Updated economies and has_market={has_market} for station {station_name}", level=2)
                 
                 # Verify the timestamp was actually written to database
                 if message_id and tracker:

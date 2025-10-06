@@ -48,7 +48,9 @@ def get_search_params():
         'sel_mats': request.args.getlist('selected_materials[]', type=str),
         'reserve_level': request.args.get('reserve_level', 'All'),
         'system_states': system_states,
-        'landing_pad_size': request.args.get('landingPadSize', 'L')  # Default to L to show all
+        'landing_pad_size': request.args.get('landingPadSize', 'L'),  # Default to L to show all
+        'max_update_age': int(request.args.get('maxUpdateAge', '0')),
+        'max_update_unit': request.args.get('maxUpdateUnit', 'days')
     }
     
     # Only include power-related params if controlling_power is set and not "Any"
@@ -64,6 +66,34 @@ def log_search_params(params):
     log_message(BLUE, "SEARCH", "Search parameters:")
     for key, value in params.items():
         log_message(BLUE, "SEARCH", f"- {key}: {value}")
+
+def get_time_filter_sql(params):
+    """Generate SQL time filter clause for station update_time
+
+    Returns:
+        tuple: (sql_clause, [param_values]) or ("", []) if filter disabled
+    """
+    age = params.get('max_update_age', 0)
+    unit = params.get('max_update_unit', 'days')
+
+    if age == 0:
+        return "", []  # No filter when age is 0
+
+    # Map frontend units to PostgreSQL interval units
+    unit_map = {
+        'hours': 'hours',
+        'days': 'days',
+        'months': 'months',
+        'years': 'years'
+    }
+
+    # PostgreSQL INTERVAL requires format like '7 days' or '24 hours'
+    interval_str = f"{age} {unit_map.get(unit, 'days')}"
+
+    # Return SQL clause and parameter
+    # Note: Database stores GMT/UTC timestamps from Elite Dangerous
+    # Use NOW() AT TIME ZONE 'UTC' to ensure we compare in UTC
+    return "st.update_time >= (NOW() AT TIME ZONE 'UTC') - INTERVAL %s", [interval_str]
 
 def get_reference_coords(conn, ref_system):
     """Get coordinates for reference system"""

@@ -33,6 +33,7 @@ from bot_display import (create_system_header, create_hotspots_table,
                         send_chunked_message, send_chunked_interaction)
 from bot_menu import (create_menu_components, create_help_message)
 from bot_common import (color_text, format_price, calculate_control_points)
+from bot_image import send_system_image
 import asyncio
 import threading
 import platform  # Add platform module to detect OS
@@ -237,6 +238,92 @@ async def on_message(message):
         else:
             await message.channel.send("Neither Unoccupied nor controlled system detected. Try again with a valid target.")
 
+    elif message.content.startswith('/help'):
+                # Handle help command
+        help_message = create_help_message()
+        await message.channel.send(help_message)
+        return
+
+    elif message.content.startswith('/system'):
+        print(f"\nReceived command: {message.content}")
+        parts = message.content.split()
+        if len(parts) < 2:
+            response = "Please provide a system name. Usage: /system <system_name> [view_type]"
+            await message.channel.send(response)
+            print(f"\nBot response: {response}")
+            return
+            
+        # Handle help command
+        if parts[1].lower() == 'help':
+            help_message = create_help_message()
+            await message.channel.send(help_message)
+            return
+
+        # Handle system names with spaces and check for "stations" view
+        view_type = None
+        if len(parts) > 2 and parts[-1] in ['stations']:
+            view_type = parts[-1]
+            system_name = ' '.join(parts[1:-1])
+        else:
+            system_name = ' '.join(parts[1:])
+
+        print(f"\nProcessing system request for: {system_name} (view: {view_type})")
+
+        # Special case for test system - render the template as an image
+        if system_name.lower() == 'test':
+            try:
+                # Create a sample system data object for testing
+                test_system = {
+                    'name': 'Test System',
+                    'controllingPower': 'Archon Delaine',
+                    'powerState': 'Stronghold',
+                    'powers': ['Aisling Duval', 'Edmund Mahon', 'Zemina Torval'],
+                    'systemState': 'Boom',
+                    'population': 27790025,
+                    'stations': [
+                        {
+                            'name': "Wolff's Locus",
+                            'landingPads': 'L',
+                            'distanceToArrival': 1250,
+                            'updateTime': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        },
+                        {
+                            'name': "Carter Port",
+                            'landingPads': 'M',
+                            'distanceToArrival': 780,
+                            'updateTime': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        }
+                    ]
+                }
+                
+                await message.channel.send("Rendering system data as image... (test mode)")
+                await send_system_image(message.channel, test_system)
+                print(f"\nRendered test system image")
+                return
+            except Exception as e:
+                import traceback
+                print(f"Error rendering image: {e}")
+                traceback.print_exc()
+                await message.channel.send(f"Error rendering image: {str(e)}")
+                return
+
+        # Fetch system data
+        system_data = fetch_system_data(system_name)
+        if not system_data:
+            response = f"Error: Could not fetch data for system {system_name}"
+            await message.channel.send(response)
+            print(f"\nBot response: {response}")
+            return
+
+        # Send system header
+        header = create_system_header(system_data)
+        await message.channel.send(f"```ansi\n{header}\n```")
+        print(f"\nBot header sent:\n{header}")
+
+        # If stations view is requested, show stations table
+        if view_type == 'stations':
+            await send_chunked_message(message.channel, create_stations_table(system_data), chunk_size=8)
+
     elif message.content.startswith('/reinforce'):
         print(f"\nReceived command: {message.content}")
         
@@ -314,7 +401,7 @@ async def on_message(message):
             if view_type in ['tables', 'stations']:
                 await send_chunked_message(message.channel, create_stations_table(system_data), chunk_size=8)
 
-    elif message.content == '99!':
+    elif message.content == '969!':
         brooklyn_99_quotes = [
             'I\'m the human form of the 💯 emoji.',
             'Bingpot!',

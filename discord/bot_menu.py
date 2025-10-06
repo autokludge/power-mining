@@ -55,8 +55,8 @@ COMMAND_DESCRIPTIONS = {
 def create_help_message() -> str:
     """Creates the help message with available commands"""
     help_text = "**Available Commands**\n\n"
-    help_text += "/reinforce <system_name> - Shows menu with mining options\n\n"
-    help_text += "**View Types**\n"
+    help_text += "`1) Command `  `2) System or id64`  `Mining Type`  \n"
+    help_text += "`/reinforce `  `<system_name>    `  `core       ` \n\n"
     
     for command, description in COMMAND_DESCRIPTIONS.items():
         help_text += f"`{command}` - {description}\n"
@@ -65,6 +65,8 @@ def create_help_message() -> str:
     help_text += "/reinforce Sol - Shows menu for Sol system\n"
     help_text += "/reinforce Sol laser - Shows laser mining in Sol\n"
     help_text += "/reinforce help - Shows this help message"
+    help_text += "/reinforce help - Shows this help message"
+    help_text += "/system Sol stations - Shows this help message"
     
     return help_text
 

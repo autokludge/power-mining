@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <link rel="stylesheet" href="table.css" type="text/css">
+  <style>
+    *, html, body, table, p, span {
+        font-family: 'ChakraPetch6', sans-serif;
+        color: white;
+        background-color: #161616;
+    }
+
+    body { font-family: sans-serif; margin: 1em; }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+    }
+    th, td {
+      border: 1px solid #888;
+      padding: 6px 12px;
+    }
+    th {
+      background-color: #222;
+      color: white;
+    }
+    tr:nth-child(even) {
+      background-color: #303030;
+    }
+    tr:nth-child(odd) {
+      background-color: #2e2e2e;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+     <h1>{{ system_name }} <span class="updated">Last Updated: {{ updated }}</span></h1>
+
+     <table class="discord-table">
+        <tr><th>Hotspots</th><th>Type</th><th>RSRV</th><th>Cargo</th><th>Station</th><th>&#9716;</th><th>Sell for</th><th>CTRL Pts</th></tr>
+          <tr>
+              <td>A 7 A Ring &#9210; 2</td>
+              <td>Metallic</td>
+              <td>&block;&block;&block;&blk14;</td>
+              <td>Monazite</td>
+              <td>Wolff's Locus [L]</td>
+              <td>9d</td>
+              <td>657,619</td>
+              <td>60T = 7361</td>
+          </tr>
+          <tr>
+              <td>A 7 A Ring &#9210; 2</td>
+              <td>Metallic</td>
+              <td>&block;&block;&block;&blk14;</td>
+              <td>Monazite</td>
+              <td>Wolff's Locus [L]</td>
+              <td>9d</td>
+              <td>657,619</td>
+              <td>60T = 7361</td>
+          </tr>
+          <tr>
+              <td>A 7 A Ring &#9210; 2</td>
+              <td>Metallic</td>
+              <td>&block;&block;&block;&blk14;</td>
+              <td>Monazite</td>
+              <td>Wolff's Locus [L]</td>
+              <td>9d</td>
+              <td>657,619</td>
+              <td>60T = 7361</td>
+          </tr>
+      </table>
+
+     <div class="columns-container">
+        <div id="system-info">
+          <div class="column column-one">
+            <span class="first">Controlling Power</span><span class="second {{ power_class }}">{{ controllingPower }}</span>
+            <span class="first">Undermining</span><span class="second">
+              <ul> 
+                {% for power in powers_with_classes %}
+                  <li class="undermining {{ power.css_class }}">{{ power.name }}</li>
+                {% else %}
+                  <li class="undermining">None</li>
+                {% endfor %}
+              </ul>
+            </span>
+            <span class="first">Power State</span><span class="second">{{ powerState }}</span>
+            <span class="first">Control Points</span><span class="second number">8541 <b class="control">&block;&block;&blk14;&blk14;&blk14;&blk14;&blk14;</b></span>
+            <span class="first">Current Level %</span><span class="second number">024% <b class="current">&block;&block;&block;&block;&blk14;&blk14;&blk14;</b></span>
+            <span class="first">Reinforcing</span><span class="second number">2000 <b class="reinf">&blk14;&blk14;&block;&#65372;&blk14;&blk14;&blk14;</b></span>
+            <span class="first">Undermining</span><span class="second number">4000 <b class="under">&blk14;&blk14;&block;&#65372;&blk14;&blk14;&blk14;</b></span>
+            <span class="first">Danger of Losing</span><span class="second danger"><b class="danger">high</b></span>
+          </div>
+          <div class="column column-two">
+              <span class="first">Population</span><span class="second number">{{ population }}</span>
+              <span class="first">Government</span><span class="second">Democracy</span>
+              <span class="first">Security</span><span class="second">High</span>
+              <span class="first">System State</span><span class="second">
+              <ul>
+                   <li data-state="Boom" class="system-state">Boom</li>
+                   <li class="system-state">Expansion</li>
+              </ul>
+              </span>
+              <span class="first">1st Economy</span><span class="second">Industrial</span>
+              <span class="first">2nd Economy</span><span class="second">Refinery</span>
+              <span class="first">Factions</span><span class="second number">6</span>
+              <span class="first">Stations</span><span class="second number">{{ stations|length }}</span>
+              <span class="first">Settlements</span><span class="second number">0</span>
+          </div>
+     
+        </div>
+     
+
+     </div>
+  </div>
+</body>
+</html>

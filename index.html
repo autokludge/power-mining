@@ -86,7 +86,7 @@
                     </div>
                     -->
                 </div>
-                
+
                 <div class="form-row">
                     <div class="form-group inline-group">
                         <label for="controlling_power">Your Power:</label>
@@ -227,6 +227,23 @@
                 </div>
                 
                 <div class="form-row">
+                    <div class="form-group inline-group">
+                        <label for="maxUpdateAge"><span class="new-tag">NEW</span> Max Age:</label>
+                        <div class="time-filter-container">
+                            <input type="checkbox" id="timeFilterToggle" class="time-filter-toggle" checked>
+                            <label for="timeFilterToggle" class="toggle-label"></label>
+                            <input type="number" id="maxUpdateAge" name="maxUpdateAge" value="48" min="0" max="9999" class="time-input">
+                            <select id="maxUpdateUnit" name="maxUpdateUnit" class="time-unit-select">
+                                <option value="hours" selected>Hours</option>
+                                <option value="days">Days</option>
+                                <option value="months">Months</option>
+                                <option value="years">Years</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-row">
                     <div class="form-group mining-type-group">
                         <label for="miningTypeInput">Mining Type:</label>
                         <div class="materials-input-container">
@@ -287,8 +304,7 @@
                     <button type="button" class="btn btn-reset" onclick="formStorage.clearStorage()">Reset</button>
                     <div class="status-container">
                         <div class="notice-status">
-                            <div class="notice-line">✔️ Failing "Any" mineral/metal queries should be fixed.</div>
-                            <div class="notice-line">⚠️ Combining "Any" power with "Any" mineral/metal will probably timeout.</div>
+                            <div class="notice-line">✔️ RES and Platinum Hotspots search should be faster now.</div>
                         </div>
                         <div class="eddn-status">
                             <div class="eddn-title">EDDN Live Update:</div>

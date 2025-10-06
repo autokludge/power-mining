@@ -4,29 +4,29 @@
 
 **Columns:**
 
-| Column              | Type                          | Nullable | Default | Description/Notes                                                 |
-| ------------------- | ----------------------------- | -------- | ------- | ----------------------------------------------------------------- |
-| `id64`              | `BIGINT`                      | NO       |         | Primary key (unique system identifier).                           |
-| `name`              | `TEXT`                        | NO       |         | Unique system name.                                               |
-| `x`                 | `DOUBLE PRECISION`            | YES      |         | X coordinate.                                                     |
-| `y`                 | `DOUBLE PRECISION`            | YES      |         | Y coordinate.                                                     |
-| `z`                 | `DOUBLE PRECISION`            | YES      |         | Z coordinate.                                                     |
-| `controlling_power` | `TEXT`                        | YES      |         | Name of the controlling power (if any).                           |
-| `power_state`       | `TEXT`                        | YES      |         | A string indicating the system's power state (e.g., "Fortified"). |
-| `powers_acquiring`  | `JSONB`                       | YES      |         | JSON field for additional power-acquisition data.                 |
-| `control_progress`  | `DOUBLE PRECISION`            | YES      |         | PowerplayStateControlProgress from journal (-1.0 to +1.0 or beyond). |
-| `power_reinforcement` | `INTEGER`                   | YES      |         | PowerplayStateReinforcement from journal (control points gained).  |
-| `power_undermining` | `INTEGER`                     | YES      |         | PowerplayStateUndermining from journal (control points lost).      |
-| `distance_from_sol` | `DOUBLE PRECISION`            | YES      |         | Pre-calculated distance to Sol, if used.                          |
-| `primary_economy`   | `TEXT`                        | YES      |         | Primary economy type of the system.                               |
-| `secondary_economy` | `TEXT`                        | YES      |         | Secondary economy type of the system.                             |
-| `security`          | `TEXT`                        | YES      |         | Security level of the system.                                     |
-| `government`        | `TEXT`                        | YES      |         | Government type of the system.                                    |
-| `system_state`      | `TEXT`                        | YES      |         | Current state of the system (e.g., "Boom", "Civil War").          |
-| `last_updated`      | `TIMESTAMP WITHOUT TIME ZONE` | YES      |         | Timestamp of when the system data was last updated.               |
-| `controlling_faction` | `TEXT`                      | YES      |         | Name of the controlling faction in the system.                    |
-| `active_states`     | `JSONB`                       | YES      |         | JSON array of active states for the controlling faction.          |
-| `all_factions`      | `JSONB`                       | YES      |         | JSON array of all factions in the system and their data.          |
+| Column                | Type                          | Nullable | Default | Description/Notes                                                 |
+| --------------------- | ----------------------------- | -------- | ------- | ----------------------------------------------------------------- |
+| `id64`                | `BIGINT`                      | NO       |         | Primary key (unique system identifier).                           |
+| `name`                | `TEXT`                        | NO       |         | Unique system name.                                               |
+| `x`                   | `DOUBLE PRECISION`            | YES      |         | X coordinate.                                                     |
+| `y`                   | `DOUBLE PRECISION`            | YES      |         | Y coordinate.                                                     |
+| `z`                   | `DOUBLE PRECISION`            | YES      |         | Z coordinate.                                                     |
+| `controlling_power`   | `TEXT`                        | YES      |         | Name of the controlling power (if any).                           |
+| `power_state`         | `TEXT`                        | YES      |         | A string indicating the system's power state (e.g., "Fortified"). |
+| `powers_acquiring`    | `JSONB`                       | YES      |         | JSON field for additional power-acquisition data.                 |
+| `control_progress`    | `DOUBLE PRECISION`            | YES      |         | PowerplayStateControlProgress from journal (-1.0 to +1.0 or beyond). |
+| `power_reinforcement` | `INTEGER`                     | YES      |         | PowerplayStateReinforcement from journal (control points gained).  |
+| `power_undermining`   | `INTEGER`                     | YES      |         | PowerplayStateUndermining from journal (control points lost).      |
+| `distance_from_sol`   | `DOUBLE PRECISION`            | YES      |         | Pre-calculated distance to Sol, if used.                          |
+| `primary_economy`     | `TEXT`                        | YES      |         | Primary economy type of the system.                               |
+| `secondary_economy`   | `TEXT`                        | YES      |         | Secondary economy type of the system.                             |
+| `security`            | `TEXT`                        | YES      |         | Security level of the system.                                     |
+| `government`          | `TEXT`                        | YES      |         | Government type of the system.                                    |
+| `system_state`        | `TEXT`                        | YES      |         | Current state of the system (e.g., "Boom", "Civil War").          |
+| `last_updated`        | `TIMESTAMP WITHOUT TIME ZONE` | YES      |         | Timestamp of when the system data was last updated.               |
+| `controlling_faction` | `TEXT`                        | YES      |         | Name of the controlling faction in the system.                    |
+| `active_states`       | `JSONB`                       | YES      |         | JSON array of active states for the controlling faction.          |
+| `all_factions`        | `JSONB`                       | YES      |         | JSON array of all factions in the system and their data.          |
 
 **Constraints and Indexes:**
 

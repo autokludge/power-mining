@@ -175,20 +175,13 @@ function formatUpdateTime(updateTimeStr) {
         dateTime = new Date(updateTimeStr.replace(' ', 'T') + 'Z');
     }
 
-    // Get current time in UTC
+    // Get current time - both are already in UTC for comparison
     const now = new Date();
 
-    Date.prototype.deleteHours= function(h){
-        this.setHours(this.getHours()-h);
-        return this;
-    }
-
-    dateTime.deleteHours(1);
-
-    const nowUTC = new Date(now.getTime() + now.getTimezoneOffset() * 60000);
-
     // Calculate time difference in minutes
-    const diffMinutes = Math.floor((nowUTC - dateTime) / (1000 * 60));
+    // dateTime has 'Z' appended so it's parsed as UTC
+    // We compare directly with now (which is also UTC internally)
+    const diffMinutes = Math.floor((now - dateTime) / (1000 * 60));
 
     // Format based on time difference
     if (diffMinutes < 60) {

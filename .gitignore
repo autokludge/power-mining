@@ -59,8 +59,6 @@ ENV/
 .env.local
 
 # Logs and Database (additional patterns)
-logs/
-log/
 *.sqlite3
 
 # OS
@@ -137,3 +135,17 @@ schema/update_structure.md
 schema/update_live_schema.md
 /test
 /schema/eddn
+/power
+*.otf
+fonts/IBMPlexMono-Bold.woff2
+fonts/IBMPlexMono-Regular.woff2
+fonts/IBMPlexMono-Text.woff2
+fonts/SairaCondensed-Bold.ttf
+fonts/SairaCondensed-Light.ttf
+fonts/SairaCondensed-Regular-Latin.woff2
+fonts/SairaCondensed-Regular.ttf
+fonts/SpaceMono-Bold.woff2
+fonts/SpaceMono-Regular.woff2
+data/possible events to listen to.json
+json/Journal.FSDJump.sample.jsonl
+utils/old/dump_powerstats.py

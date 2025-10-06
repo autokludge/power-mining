@@ -48,7 +48,7 @@ def color_text(text: str, color: str, width: int = None) -> str:
 
 def calculate_control_points(price: int) -> int:
     """Calculate control points based on price"""
-    return int(price * 60 / 1340 / 4)
+    return int((price * 60 / 1340 / 4) * 0.65 )
 
 def format_price(price: int) -> str:
     """Format price with commas and color based on value"""

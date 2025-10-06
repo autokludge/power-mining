@@ -92,9 +92,13 @@ def search(display_format='full'):
             
             # First pass: collect all results
             for row in rows:
+                # Skip rows with no station (can happen with time filter + LEFT JOIN)
+                if row['station_name'] is None:
+                    continue
+
                 # Create a unique key for this combination
                 key = (row['system_id64'], row['station_name'])
-                
+
                 # Skip if we've seen this exact combination before
                 if key in seen_keys:
                     continue

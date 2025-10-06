@@ -142,57 +142,129 @@ def search_res_hotspots():
         limit = int(request.args.get('limit', '10'))  # Default 10 results
         controlling_power = request.args.get('controlling_power', 'Any')
         opposing_power = request.args.get('opposing_power', 'Any')
-        
+
         print(f"Search parameters - ref_system: {ref_system}, distance: {max_distance}, limit: {limit}, "
               f"controlling_power: {controlling_power}, opposing_power: {opposing_power}")
-        
+
         conn = get_db_connection()
         if not conn:
             return jsonify({'error': 'Database connection failed'}), 500
         c = conn.cursor(cursor_factory=DictCursor)
-        
+
+        # Get reference system coordinates
         c.execute('SELECT x, y, z FROM systems WHERE name ILIKE %s', (ref_system,))
         ref_coords = c.fetchone()
         if not ref_coords:
             conn.close()
             return jsonify({'error': 'Reference system not found'}), 404
-            
+
         rx, ry, rz = ref_coords['x'], ref_coords['y'], ref_coords['z']
+
+        # Load CSV data
         hotspot_data = load_res_data()
         if not hotspot_data:
             conn.close()
             return jsonify({'error': 'No RES hotspot data available'}), 404
-            
+
+        # Extract system names from CSV
+        system_names = [e['system'] for e in hotspot_data]
+
+        # Build single query to get all systems at once
+        sql = '''SELECT s.*,
+                        sqrt(power(s.x - %s, 2) + power(s.y - %s, 2) + power(s.z - %s, 2)) as distance
+                 FROM systems s
+                 WHERE s.name = ANY(%s)
+                 AND power(s.x - %s, 2) + power(s.y - %s, 2) + power(s.z - %s, 2) <= power(%s, 2)'''
+        params = [rx, ry, rz, system_names, rx, ry, rz, max_distance]
+
+        # Add power conditions
+        if controlling_power != 'Any' or opposing_power != 'Any':
+            opp_conditions, opp_params = get_opposing_power_filter(opposing_power)
+            power_conditions, power_params = build_power_conditions('', controlling_power)
+
+            if opp_conditions:
+                sql += " AND " + " AND ".join(opp_conditions)
+                params.extend(opp_params)
+            if power_conditions:
+                sql += " AND " + " AND ".join(power_conditions)
+                params.extend(power_params)
+
+        c.execute(sql, params)
+        systems = c.fetchall()
+
+        if not systems:
+            conn.close()
+            return jsonify([])
+
+        # Build lookup map: system_name -> system_data
+        system_map = {s['name'].lower(): s for s in systems}
+
+        # Get all system IDs for bulk station query
+        system_ids = [s['id64'] for s in systems]
+
+        # Get all station commodities in one query
+        c.execute('''
+            SELECT
+                s.system_id64,
+                s.station_name,
+                s.landing_pad_size,
+                s.distance_to_arrival,
+                s.station_type,
+                s.update_time,
+                sc.commodity_name,
+                sc.sell_price,
+                sc.demand,
+                CASE
+                    WHEN sc.commodity_name IN ('Platinum', 'Painite', 'Osmium') THEN 1
+                    ELSE 2
+                END as priority
+            FROM stations s
+            JOIN station_commodities sc ON s.system_id64 = sc.system_id64
+                AND s.station_name = sc.station_name
+            WHERE s.system_id64 = ANY(%s)
+            AND sc.sell_price > 0 AND sc.demand > 0
+            ORDER BY s.system_id64, s.station_name, priority, sc.sell_price DESC
+        ''', (system_ids,))
+
+        # Group station commodities by system_id64
+        station_map = {}
+        for row in c.fetchall():
+            system_id64 = row['system_id64']
+            station_name = row['station_name']
+
+            if system_id64 not in station_map:
+                station_map[system_id64] = {}
+
+            if station_name not in station_map[system_id64]:
+                station_map[system_id64][station_name] = {
+                    'name': station_name,
+                    'pad_size': row['landing_pad_size'],
+                    'distance': row['distance_to_arrival'],
+                    'station_type': row['station_type'],
+                    'update_time': row['update_time'].strftime('%Y-%m-%d') if row['update_time'] else None,
+                    'other_commodities': []
+                }
+
+            # Add commodity (limit 3 non-priority commodities per station)
+            station = station_map[system_id64][station_name]
+            if row['priority'] == 1 or len([c for c in station['other_commodities'] if c.get('priority') == 2]) < 3:
+                station['other_commodities'].append({
+                    'name': row['commodity_name'],
+                    'sell_price': row['sell_price'],
+                    'demand': row['demand'],
+                    'priority': row['priority']
+                })
+
+        # Build results matching CSV entries
         results = []
         for e in hotspot_data:
-            # Build SQL with power conditions
-            sql = '''SELECT s.*, sqrt(power(s.x - %s, 2) + power(s.y - %s, 2) + power(s.z - %s, 2)) as distance
-                    FROM systems s WHERE s.name ILIKE %s'''
-            params = [rx, ry, rz, e['system']]
-            
-            # Add power conditions
-            if controlling_power != 'Any' or opposing_power != 'Any':
-                opp_conditions, opp_params = get_opposing_power_filter(opposing_power)
-                # For simple controlling power filtering, use empty string as power_goal
-                power_conditions, power_params = build_power_conditions('', controlling_power)
-                
-                if opp_conditions:
-                    sql += " AND " + " AND ".join(opp_conditions)
-                    params.extend(opp_params)
-                if power_conditions:
-                    sql += " AND " + " AND ".join(power_conditions)
-                    params.extend(power_params)
-            
-            c.execute(sql, params)
-            system = c.fetchone()
-            if not system:
+            system_key = e['system'].lower()
+            if system_key not in system_map:
                 continue
-                
-            # Skip if beyond max distance
-            if float(system['distance']) > max_distance:
-                continue
-                
-            st = get_station_commodities(conn, system['id64'])
+
+            system = system_map[system_key]
+            stations = list(station_map.get(system['id64'], {}).values())
+
             results.append({
                 'system': e['system'],
                 'controlling_power': system['controlling_power'] or 'None',
@@ -203,15 +275,15 @@ def search_res_hotspots():
                 'ls': e['ls'],
                 'res_zone': e['res_zone'],
                 'comment': e['comment'],
-                'stations': st
+                'stations': stations
             })
-        
+
         print(f"Found {len(results)} results before limit")
         # Sort by distance and limit results
         results.sort(key=lambda x: x['distance'])
         results = results[:limit]
         print(f"Returning {len(results)} results after limit")
-        
+
         conn.close()
         return jsonify(results)
     except Exception as e:
@@ -227,57 +299,129 @@ def search_high_yield_platinum():
         limit = int(request.args.get('limit', '10'))  # Default 10 results
         controlling_power = request.args.get('controlling_power', 'Any')
         opposing_power = request.args.get('opposing_power', 'Any')
-        
+
         print(f"Search parameters - ref_system: {ref_system}, distance: {max_distance}, limit: {limit}, "
               f"controlling_power: {controlling_power}, opposing_power: {opposing_power}")
-        
+
         conn = get_db_connection()
         if not conn:
             return jsonify({'error': 'Database connection failed'}), 500
         c = conn.cursor(cursor_factory=DictCursor)
-        
+
+        # Get reference system coordinates
         c.execute('SELECT x, y, z FROM systems WHERE name = %s', (ref_system,))
         ref_coords = c.fetchone()
         if not ref_coords:
             conn.close()
             return jsonify({'error': 'Reference system not found'}), 404
-            
+
         rx, ry, rz = ref_coords['x'], ref_coords['y'], ref_coords['z']
+
+        # Load CSV data
         data = load_high_yield_platinum()
         if not data:
             conn.close()
             return jsonify({'error': 'No high yield platinum data available'}), 404
-            
+
+        # Extract system names from CSV
+        system_names = [e['system'] for e in data]
+
+        # Build single query to get all systems at once
+        sql = '''SELECT s.*,
+                        sqrt(power(s.x - %s, 2) + power(s.y - %s, 2) + power(s.z - %s, 2)) as distance
+                 FROM systems s
+                 WHERE s.name = ANY(%s)
+                 AND power(s.x - %s, 2) + power(s.y - %s, 2) + power(s.z - %s, 2) <= power(%s, 2)'''
+        params = [rx, ry, rz, system_names, rx, ry, rz, max_distance]
+
+        # Add power conditions
+        if controlling_power != 'Any' or opposing_power != 'Any':
+            opp_conditions, opp_params = get_opposing_power_filter(opposing_power)
+            power_conditions, power_params = build_power_conditions('', controlling_power)
+
+            if opp_conditions:
+                sql += " AND " + " AND ".join(opp_conditions)
+                params.extend(opp_params)
+            if power_conditions:
+                sql += " AND " + " AND ".join(power_conditions)
+                params.extend(power_params)
+
+        c.execute(sql, params)
+        systems = c.fetchall()
+
+        if not systems:
+            conn.close()
+            return jsonify([])
+
+        # Build lookup map: system_name -> system_data
+        system_map = {s['name'].lower(): s for s in systems}
+
+        # Get all system IDs for bulk station query
+        system_ids = [s['id64'] for s in systems]
+
+        # Get all station commodities in one query
+        c.execute('''
+            SELECT
+                s.system_id64,
+                s.station_name,
+                s.landing_pad_size,
+                s.distance_to_arrival,
+                s.station_type,
+                s.update_time,
+                sc.commodity_name,
+                sc.sell_price,
+                sc.demand,
+                CASE
+                    WHEN sc.commodity_name IN ('Platinum', 'Painite', 'Osmium') THEN 1
+                    ELSE 2
+                END as priority
+            FROM stations s
+            JOIN station_commodities sc ON s.system_id64 = sc.system_id64
+                AND s.station_name = sc.station_name
+            WHERE s.system_id64 = ANY(%s)
+            AND sc.sell_price > 0 AND sc.demand > 0
+            ORDER BY s.system_id64, s.station_name, priority, sc.sell_price DESC
+        ''', (system_ids,))
+
+        # Group station commodities by system_id64
+        station_map = {}
+        for row in c.fetchall():
+            system_id64 = row['system_id64']
+            station_name = row['station_name']
+
+            if system_id64 not in station_map:
+                station_map[system_id64] = {}
+
+            if station_name not in station_map[system_id64]:
+                station_map[system_id64][station_name] = {
+                    'name': station_name,
+                    'pad_size': row['landing_pad_size'],
+                    'distance': row['distance_to_arrival'],
+                    'station_type': row['station_type'],
+                    'update_time': row['update_time'].strftime('%Y-%m-%d') if row['update_time'] else None,
+                    'other_commodities': []
+                }
+
+            # Add commodity (limit 3 non-priority commodities per station)
+            station = station_map[system_id64][station_name]
+            if row['priority'] == 1 or len([c for c in station['other_commodities'] if c.get('priority') == 2]) < 3:
+                station['other_commodities'].append({
+                    'name': row['commodity_name'],
+                    'sell_price': row['sell_price'],
+                    'demand': row['demand'],
+                    'priority': row['priority']
+                })
+
+        # Build results matching CSV entries
         results = []
         for e in data:
-            # Build SQL with power conditions
-            sql = '''SELECT s.*, sqrt(power(s.x - %s, 2) + power(s.y - %s, 2) + power(s.z - %s, 2)) as distance
-                    FROM systems s WHERE s.name = %s'''
-            params = [rx, ry, rz, e['system']]
-            
-            # Add power conditions
-            if controlling_power != 'Any' or opposing_power != 'Any':
-                opp_conditions, opp_params = get_opposing_power_filter(opposing_power)
-                # For simple controlling power filtering, use empty string as power_goal
-                power_conditions, power_params = build_power_conditions('', controlling_power)
-                
-                if opp_conditions:
-                    sql += " AND " + " AND ".join(opp_conditions)
-                    params.extend(opp_params)
-                if power_conditions:
-                    sql += " AND " + " AND ".join(power_conditions)
-                    params.extend(power_params)
-            
-            c.execute(sql, params)
-            system = c.fetchone()
-            if not system:
+            system_key = e['system'].lower()
+            if system_key not in system_map:
                 continue
-                
-            # Skip if beyond max distance
-            if float(system['distance']) > max_distance:
-                continue
-                
-            st = get_station_commodities(conn, system['id64'])
+
+            system = system_map[system_key]
+            stations = list(station_map.get(system['id64'], {}).values())
+
             results.append({
                 'system': e['system'],
                 'controlling_power': system['controlling_power'] or 'None',
@@ -287,15 +431,15 @@ def search_high_yield_platinum():
                 'ring': e['ring'],
                 'percentage': e['percentage'],
                 'comment': e['comment'],
-                'stations': st
+                'stations': stations
             })
-        
+
         print(f"Found {len(results)} results before limit")
         # Sort by distance and limit results
         results.sort(key=lambda x: x['distance'])
         results = results[:limit]
         print(f"Returning {len(results)} results after limit")
-        
+
         conn.close()
         return jsonify(results)
     except Exception as e:

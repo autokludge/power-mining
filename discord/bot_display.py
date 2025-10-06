@@ -264,10 +264,10 @@ def create_stations_table(data: Dict) -> str:
         for mineral, price, demand, rings_text in station_minerals[:10]:
             control_points = calculate_control_points(price)
             table.add_row([
-                format_station_name(station['name'], station, 30),
+                format_station_name(station['name'], station, 20),
                 f"{int(station.get('distanceToArrival', 0))} ls",
                 format_timestamp(station['updateTime']) if station.get('updateTime') else 'unknown',
-                color_text(format_mineral_name(mineral), 'white', width=20),
+                color_text(format_mineral_name(mineral), 'white', width=16),
                 format_price(price),
                 str(demand),
                 rings_text,

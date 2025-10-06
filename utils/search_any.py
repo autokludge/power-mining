@@ -4,10 +4,14 @@ from utils.search_queries import (
     get_main_select, get_main_joins, get_order_by
 )
 from utils.common import log_message, BLUE
+from utils.search_common import get_time_filter_sql
 
 def build_any_material_query(params, coords, valid_ring_types, where_conditions, where_params):
     """Build query specifically for 'Any' material search that respects all filters"""
     rx, ry, rz = coords
+
+    # Get time filter SQL
+    time_filter_sql, time_filter_params = get_time_filter_sql(params)
 
     # Debug logging of ALL input parameters
     log_message(BLUE, "SEARCH", "Input parameters:")
@@ -20,6 +24,7 @@ def build_any_material_query(params, coords, valid_ring_types, where_conditions,
     log_message(BLUE, "SEARCH", f"- Valid ring types: {valid_ring_types}")
     log_message(BLUE, "SEARCH", f"- Landing pad size: {params['landing_pad_size']}")
     log_message(BLUE, "SEARCH", f"- Demand range: {params['min_demand']} - {params['max_demand']}")
+    log_message(BLUE, "SEARCH", f"- Time filter: {time_filter_sql} with params {time_filter_params}")
     
     query = """
     WITH RECURSIVE
@@ -86,7 +91,7 @@ def build_any_material_query(params, coords, valid_ring_types, where_conditions,
     ),
     -- Step 4: Get valid stations with commodity prices
     valid_stations AS MATERIALIZED (
-        SELECT 
+        SELECT
             st.system_id64,
             st.station_id,
             st.station_name,
@@ -98,9 +103,10 @@ def build_any_material_query(params, coords, valid_ring_types, where_conditions,
             sc.sell_price,
             sc.demand
         FROM stations st
-        JOIN station_commodities sc ON st.system_id64 = sc.system_id64 
+        JOIN station_commodities sc ON st.system_id64 = sc.system_id64
             AND st.station_id = sc.station_id
         WHERE EXISTS (SELECT 1 FROM filtered_systems fs WHERE fs.id64 = st.system_id64)
+        """ + ("AND " + time_filter_sql if time_filter_sql else "") + """
         AND sc.sell_price > 0
         AND (
             (%s = 0 AND %s = 0) OR  -- No demand limits
@@ -173,11 +179,11 @@ def build_any_material_query(params, coords, valid_ring_types, where_conditions,
     
     # Build parameters list - CORRECT ORDER IS CRUCIAL
     query_params = []
-    
+
     # 1. Add power condition params first if they exist
     if where_params:
         query_params.extend(where_params)
-    
+
     # 2. Add the rest in correct order
     query_params.extend([
         # Distance calculation params
@@ -194,7 +200,15 @@ def build_any_material_query(params, coords, valid_ring_types, where_conditions,
         params['ring_type_filter'],
         # Reserve level params
         params.get('reserve_level', 'All'),
-        params.get('reserve_level', 'All'),
+        params.get('reserve_level', 'All')
+    ])
+
+    # 3. Add time filter params if they exist
+    if time_filter_params:
+        query_params.extend(time_filter_params)
+
+    # 4. Add remaining params
+    query_params.extend([
         # Demand filter params
         params['min_demand'], params['max_demand'],  # Zero-zero check
         params['min_demand'], params['max_demand'],  # Min=0 check
@@ -213,5 +227,24 @@ def build_any_material_query(params, coords, valid_ring_types, where_conditions,
     # Final debug logging
     log_message(BLUE, "SEARCH", f"Final parameter count: {len(query_params)}")
     log_message(BLUE, "SEARCH", f"Query placeholder count: {query.count('%s')}")
+    
+    # Run EXPLAIN ANALYZE for performance analysis
+    try:
+        from utils.common import get_db_connection
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        explain_query = "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + query
+        log_message(BLUE, "SEARCH", "Running EXPLAIN ANALYZE to measure performance...")
+        cur.execute(explain_query, query_params)
+        explain_results = cur.fetchall()
+        log_message(BLUE, "SEARCH", "Query plan:")
+        for row in explain_results:
+            log_message(BLUE, "SEARCH", str(row[0]))
+            
+        cur.close()
+        conn.close()
+    except Exception as e:
+        log_message(BLUE, "SEARCH", f"Failed to run EXPLAIN ANALYZE: {str(e)}")
     
     return query, query_params 

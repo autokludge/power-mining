@@ -56,4 +56,21 @@ document.addEventListener('DOMContentLoaded', function() {
             displayElement: resultsDisplay
         });
     }
+
+    // Time filter toggle handler
+    const toggle = document.getElementById('timeFilterToggle');
+    const input = document.getElementById('maxUpdateAge');
+
+    if (toggle && input) {
+        const savedValue = input.value;
+
+        toggle.addEventListener('change', function() {
+            if (!this.checked) {
+                input.dataset.savedValue = input.value;
+                input.value = '0';
+            } else {
+                input.value = input.dataset.savedValue || savedValue;
+            }
+        });
+    }
 }); 

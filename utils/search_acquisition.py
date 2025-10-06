@@ -6,6 +6,7 @@ from flask import jsonify, request
 from utils.common import log_message, get_db_connection, YELLOW, RED, BLUE
 from utils import res_data
 from utils.analytics import track_search  # Add analytics import
+from utils.search_common import get_time_filter_sql
 
 # Constants
 SYSTEM_IN_RING_NAME = False
@@ -43,6 +44,8 @@ def search(display_format='full'):
         min_demand = int(request.args.get('minDemand', '0'))
         max_demand = int(request.args.get('maxDemand', '0'))
         sel_mats = request.args.getlist('selected_materials[]', type=str)
+        max_update_age = int(request.args.get('maxUpdateAge', '0'))
+        max_update_unit = request.args.get('maxUpdateUnit', 'days')
 
         # Prepare search parameters for tracking
         search_params = {
@@ -78,6 +81,14 @@ def search(display_format='full'):
         log_message(BLUE, "SEARCH", f"- Selected materials: {sel_mats}")
         log_message(BLUE, "SEARCH", f"- System states: {system_states}")
         log_message(BLUE, "SEARCH", f"- Landing pad size: {landing_pad_size}")
+
+        # Get time filter SQL
+        time_params = {
+            'max_update_age': max_update_age,
+            'max_update_unit': max_update_unit
+        }
+        time_filter_sql, time_filter_params = get_time_filter_sql(time_params)
+        log_message(BLUE, "SEARCH", f"- Time filter: {time_filter_sql} with params {time_filter_params}")
 
         # 2) Database connection
         conn = get_db_connection()
@@ -237,19 +248,20 @@ def search(display_format='full'):
             FROM systems s
             JOIN station_commodities sc ON s.id64 = sc.system_id64
             LEFT JOIN stations st ON s.id64 = st.system_id64 AND sc.station_name = st.station_name
-            WHERE 
+            WHERE
                 s.controlling_power IS NULL
                 AND POWER(s.x - %s, 2) + POWER(s.y - %s, 2) + POWER(s.z - %s, 2) <= POWER(%s, 2)
                 AND sc.commodity_name = %s
                 AND sc.sell_price > 0
                 AND (
-                    CASE 
+                    CASE
                         WHEN %s = 0 AND %s = 0 THEN sc.demand = 0
                         WHEN %s = 0 THEN sc.demand <= %s
                         WHEN %s = 0 THEN sc.demand >= %s
                         ELSE sc.demand BETWEEN %s AND %s
                     END
                 )
+                {TIME_FILTER}
                 {UNOCCUPIED_WHERE}
             ORDER BY s.id64, sc.sell_price DESC
         ),
@@ -333,11 +345,13 @@ def search(display_format='full'):
         else:
             log_message(BLUE, "SEARCH", "No system state filter applied (Any selected or no states provided)")
 
-        # Replace placeholders for ring condition, extra where, limit, and unoccupied where
+        # Replace placeholders for ring condition, extra where, time filter, limit, and unoccupied where
         query = base_query.replace(
             "{JOIN_CONDITION}", join_condition
         ).replace(
             "{EXTRA_WHERE}", ("AND " + " AND ".join(where_conditions)) if where_conditions else ""
+        ).replace(
+            "{TIME_FILTER}", ("AND " + time_filter_sql) if time_filter_sql else ""
         ).replace(
             "{UNOCCUPIED_WHERE}", unoccupied_where
         ).replace(
@@ -374,6 +388,10 @@ def search(display_format='full'):
             max_demand, min_demand,  # For max=0 check
             min_demand, max_demand   # For between check
         ])
+
+        # Step 5.5: Add time filter params if they exist
+        if time_filter_params:
+            params.extend(time_filter_params)
 
         # Step 5.6: Add unoccupied system state filter params
         params.extend(unoccupied_params)

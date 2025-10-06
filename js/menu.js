@@ -12,9 +12,11 @@ class SearchMenu {
                 visibleButtons: ['mainSearchButton', 'highestPricesButton'],
                 searchFunction: null,  // Use default form submit
                 visibleFields: [
-                    'system', 
-                    'distance', 
+                    'system',
+                    'distance',
                     'limit',
+                    'maxUpdateAge',
+                    'maxUpdateUnit',
                     'controlling_power',
                     'power_goal',
                     'opposing_power',
