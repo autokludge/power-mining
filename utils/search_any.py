@@ -1,10 +1,52 @@
 """Query builder for Any material search"""
+import json
+import os
 from utils.search_queries import (
     get_base_cte, get_station_cte, get_ring_join_conditions,
     get_main_select, get_main_joins, get_order_by
 )
-from utils.common import log_message, BLUE
+from utils.common import log_message, BLUE, BASE_DIR
 from utils.search_common import get_time_filter_sql
+
+def get_materials_for_ring_type(ring_type, mining_types):
+    """Get list of materials minable in a ring type with specific mining methods"""
+    materials_path = os.path.join(BASE_DIR, 'data/mining_materials.json')
+    with open(materials_path, 'r') as f:
+        mat_data = json.load(f)['materials']
+
+    valid_materials = []
+    for material_name, material in mat_data.items():
+        if ring_type not in material.get('ring_types', {}):
+            continue
+
+        ring_data = material['ring_types'][ring_type]
+
+        # If no mining types or 'All', include everything
+        if not mining_types or 'All' in mining_types:
+            valid_materials.append(material_name)
+            continue
+
+        # Check if ring supports ALL selected mining methods
+        supports_all = True
+        for mining_type in mining_types:
+            mt_lower = mining_type.lower()
+            if mt_lower == 'laser surface' and not ring_data.get('surfaceLaserMining', False):
+                supports_all = False
+                break
+            elif mt_lower == 'surface' and not ring_data.get('surfaceDeposit', False):
+                supports_all = False
+                break
+            elif mt_lower == 'subsurface' and not ring_data.get('subSurfaceDeposit', False):
+                supports_all = False
+                break
+            elif mt_lower == 'core' and not ring_data.get('core', False):
+                supports_all = False
+                break
+
+        if supports_all:
+            valid_materials.append(material_name)
+
+    return valid_materials
 
 def build_any_material_query(params, coords, valid_ring_types, where_conditions, where_params):
     """Build query specifically for 'Any' material search that respects all filters"""
@@ -13,18 +55,35 @@ def build_any_material_query(params, coords, valid_ring_types, where_conditions,
     # Get time filter SQL
     time_filter_sql, time_filter_params = get_time_filter_sql(params)
 
+    # Build material arrays filtered by mining type
+    icy_materials = get_materials_for_ring_type('Icy', params['mining_types'])
+    rocky_materials = get_materials_for_ring_type('Rocky', params['mining_types'])
+    metal_rich_materials = get_materials_for_ring_type('Metal Rich', params['mining_types'])
+    metallic_materials = get_materials_for_ring_type('Metallic', params['mining_types'])
+
+    # Convert to SQL array format
+    icy_array = "ARRAY[" + ",".join([f"'{m}'" for m in icy_materials]) + "]" if icy_materials else "ARRAY[]::text[]"
+    rocky_array = "ARRAY[" + ",".join([f"'{m}'" for m in rocky_materials]) + "]" if rocky_materials else "ARRAY[]::text[]"
+    metal_rich_array = "ARRAY[" + ",".join([f"'{m}'" for m in metal_rich_materials]) + "]" if metal_rich_materials else "ARRAY[]::text[]"
+    metallic_array = "ARRAY[" + ",".join([f"'{m}'" for m in metallic_materials]) + "]" if metallic_materials else "ARRAY[]::text[]"
+
     # Debug logging of ALL input parameters
-    log_message(BLUE, "SEARCH", "Input parameters:")
-    log_message(BLUE, "SEARCH", f"- Reference system coordinates: ({rx}, {ry}, {rz})")
-    log_message(BLUE, "SEARCH", f"- Max distance: {params['max_dist']}")
-    log_message(BLUE, "SEARCH", f"- Power conditions: {where_conditions}")
-    log_message(BLUE, "SEARCH", f"- Power params: {where_params}")
-    log_message(BLUE, "SEARCH", f"- System state: {params.get('system_state', 'Any')}")
-    log_message(BLUE, "SEARCH", f"- Ring type filter: {params['ring_type_filter']}")
-    log_message(BLUE, "SEARCH", f"- Valid ring types: {valid_ring_types}")
-    log_message(BLUE, "SEARCH", f"- Landing pad size: {params['landing_pad_size']}")
-    log_message(BLUE, "SEARCH", f"- Demand range: {params['min_demand']} - {params['max_demand']}")
-    log_message(BLUE, "SEARCH", f"- Time filter: {time_filter_sql} with params {time_filter_params}")
+    # log_message(BLUE, "SEARCH", "Input parameters:")
+    # log_message(BLUE, "SEARCH", f"- Reference system coordinates: ({rx}, {ry}, {rz})")
+    # log_message(BLUE, "SEARCH", f"- Max distance: {params['max_dist']}")
+    # log_message(BLUE, "SEARCH", f"- Power conditions: {where_conditions}")
+    # log_message(BLUE, "SEARCH", f"- Power params: {where_params}")
+    # log_message(BLUE, "SEARCH", f"- System state: {params.get('system_state', 'Any')}")
+    # log_message(BLUE, "SEARCH", f"- Ring type filter: {params['ring_type_filter']}")
+    # log_message(BLUE, "SEARCH", f"- Valid ring types: {valid_ring_types}")
+    # log_message(BLUE, "SEARCH", f"- Mining types: {params['mining_types']}")
+    # log_message(BLUE, "SEARCH", f"- Landing pad size: {params['landing_pad_size']}")
+    # log_message(BLUE, "SEARCH", f"- Demand range: {params['min_demand']} - {params['max_demand']}")
+    # log_message(BLUE, "SEARCH", f"- Time filter: {time_filter_sql} with params {time_filter_params}")
+    # log_message(BLUE, "SEARCH", f"- Icy materials: {len(icy_materials)}")
+    # log_message(BLUE, "SEARCH", f"- Rocky materials: {len(rocky_materials)}")
+    # log_message(BLUE, "SEARCH", f"- Metal Rich materials: {len(metal_rich_materials)}")
+    # log_message(BLUE, "SEARCH", f"- Metallic materials: {len(metallic_materials)}")
     
     query = """
     WITH RECURSIVE
@@ -61,19 +120,19 @@ def build_any_material_query(params, coords, valid_ring_types, where_conditions,
             ms.body_name,
             ms.ring_name,
             ms.signal_count,
-            -- For each ring, determine what can be mined there
-            CASE 
-                WHEN ms.mineral_type IS NOT NULL THEN 
+            -- For each ring, determine what can be mined there (filtered by mining type)
+            CASE
+                WHEN ms.mineral_type IS NOT NULL THEN
                     ARRAY[ms.mineral_type]  -- Hotspot mineral
-                WHEN ms.ring_type = 'Icy' THEN 
-                    ARRAY['Bromellite', 'Low Temperature Diamonds', 'Void Opal', 'Alexandrite', 'Cryolite', 'Goslarite', 'Lithium Hydroxide', 'Methane Clathrate', 'Methanol Monohydrate Crystals']
-                WHEN ms.ring_type = 'Rocky' THEN 
-                    ARRAY['Alexandrite', 'Benitoite', 'Grandidierite', 'Monazite', 'Musgravite', 'Rhodplumsite', 'Serendibite', 'Bauxite', 'Bertrandite', 'Gallite', 'Indite', 'Jadeite', 'Lepidolite', 'Moissanite', 'Pyrophyllite', 'Rutile', 'Taaffeite', 'Uraninite']
-                WHEN ms.ring_type = 'Metal Rich' THEN 
-                    ARRAY['Alexandrite', 'Benitoite', 'Grandidierite', 'Monazite', 'Musgravite', 'Rhodplumsite', 'Serendibite', 'Painite', 'Platinum', 'Aluminium', 'Beryllium', 'Bismuth', 'Cobalt', 'Coltan', 'Copper', 'Gallium', 'Hafnium 178', 'Indite', 'Indium', 'Lanthanum', 'Lithium', 'Praseodymium', 'Rutile', 'Samarium', 'Silver', 'Tantalum', 'Thallium', 'Thorium', 'Titanium', 'Uranium', 'Uraninite']
-                WHEN ms.ring_type = 'Metallic' THEN 
-                    ARRAY['Monazite', 'Painite', 'Platinum', 'Aluminium', 'Beryllium', 'Bismuth', 'Cobalt', 'Copper', 'Gallite', 'Gallium', 'Gold', 'Hafnium 178', 'Indium', 'Lanthanum', 'Lithium', 'Osmium', 'Palladium', 'Praseodymium', 'Samarium', 'Silver', 'Tantalum', 'Thallium', 'Thorium', 'Titanium', 'Uranium']
-                ELSE 
+                WHEN ms.ring_type = 'Icy' THEN
+                    """ + icy_array + """
+                WHEN ms.ring_type = 'Rocky' THEN
+                    """ + rocky_array + """
+                WHEN ms.ring_type = 'Metal Rich' THEN
+                    """ + metal_rich_array + """
+                WHEN ms.ring_type = 'Metallic' THEN
+                    """ + metallic_array + """
+                ELSE
                     ARRAY[]::text[]
             END as minable_materials
         FROM filtered_systems s
@@ -227,24 +286,25 @@ def build_any_material_query(params, coords, valid_ring_types, where_conditions,
     # Final debug logging
     log_message(BLUE, "SEARCH", f"Final parameter count: {len(query_params)}")
     log_message(BLUE, "SEARCH", f"Query placeholder count: {query.count('%s')}")
-    
-    # Run EXPLAIN ANALYZE for performance analysis
-    try:
-        from utils.common import get_db_connection
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        explain_query = "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + query
-        log_message(BLUE, "SEARCH", "Running EXPLAIN ANALYZE to measure performance...")
-        cur.execute(explain_query, query_params)
-        explain_results = cur.fetchall()
-        log_message(BLUE, "SEARCH", "Query plan:")
-        for row in explain_results:
-            log_message(BLUE, "SEARCH", str(row[0]))
-            
-        cur.close()
-        conn.close()
-    except Exception as e:
-        log_message(BLUE, "SEARCH", f"Failed to run EXPLAIN ANALYZE: {str(e)}")
-    
+
+    # Run EXPLAIN ANALYZE for performance analysis (DISABLED)
+    # Uncomment to debug query performance
+    # try:
+    #     from utils.common import get_db_connection
+    #     conn = get_db_connection()
+    #     cur = conn.cursor()
+    #
+    #     explain_query = "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + query
+    #     log_message(BLUE, "SEARCH", "Running EXPLAIN ANALYZE to measure performance...")
+    #     cur.execute(explain_query, query_params)
+    #     explain_results = cur.fetchall()
+    #     log_message(BLUE, "SEARCH", "Query plan:")
+    #     for row in explain_results:
+    #         log_message(BLUE, "SEARCH", str(row[0]))
+    #
+    #     cur.close()
+    #     conn.close()
+    # except Exception as e:
+    #     log_message(BLUE, "SEARCH", f"Failed to run EXPLAIN ANALYZE: {str(e)}")
+
     return query, query_params 

@@ -240,13 +240,13 @@ def build_optimized_query(params, coords, material, valid_ring_types, where_cond
     mineral_condition, join_params = get_ring_join_conditions(params['ring_type_filter'], params['signal_type'], valid_ring_types)
 
     # Debug logging for initial conditions
-    print("\nInitial conditions:")
-    print("Where conditions:", where_conditions)
-    print("Where params:", where_params)
-    print("Mineral condition:", mineral_condition)
-    print("Join params:", join_params)
-    print("Time filter params:", time_filter_params)
-    print("Total initial params:", len(where_params) + len(join_params) + len(time_filter_params))
+    # print("\nInitial conditions:")
+    # print("Where conditions:", where_conditions)
+    # print("Where params:", where_params)
+    # print("Mineral condition:", mineral_condition)
+    # print("Join params:", join_params)
+    # print("Time filter params:", time_filter_params)
+    # print("Total initial params:", len(where_params) + len(join_params) + len(time_filter_params))
 
     # Build query following the step-by-step filtering approach
     # Each CTE applies filters in a specific order for optimization
@@ -411,16 +411,16 @@ ORDER BY s.system_rank,
         query_params.append(params['limit'])
     
     # Debug logging for query execution
-    print("\nDebug counts will be shown after execution")
-    print("\nFinal query params:", query_params)
-    print("Total params:", len(query_params))
+    # print("\nDebug counts will be shown after execution")
+    # print("\nFinal query params:", query_params)
+    # print("Total params:", len(query_params))
     
     # Count placeholders in query
-    placeholder_count = query.count('%s')
-    print("\nPlaceholder count:", placeholder_count)
-    print("Parameter count:", len(query_params))
-    if placeholder_count != len(query_params):
-        print("WARNING: Mismatch between placeholders and parameters!")
-        print("Query needs", placeholder_count, "params but got", len(query_params))
-    
+    # placeholder_count = query.count('%s')
+    # print("\nPlaceholder count:", placeholder_count)
+    # print("Parameter count:", len(query_params))
+    # if placeholder_count != len(query_params):
+    #     print("WARNING: Mismatch between placeholders and parameters!")
+    #     print("Query needs", placeholder_count, "params but got", len(query_params))
+
     return query, query_params
