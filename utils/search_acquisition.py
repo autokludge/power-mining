@@ -133,28 +133,28 @@ def search(display_format='full'):
                         valid_ring_types.append(ring_type)
                         log_message(BLUE, "MINING", f"Added {ring_type} to valid ring types (All mining types)")
                 else:
-                    # Check if this ring type supports ALL selected mining methods
-                    supports_all = True
+                    # Check if this ring type supports ANY of the selected mining methods
+                    supports_any = False
                     for mtype in mining_types:
-                        if mtype.lower() == 'laser surface' and not data.get('surfaceLaserMining', False):
-                            supports_all = False
-                            log_message(YELLOW, "MINING", f"{ring_type} does not support laser surface mining")
+                        if mtype.lower() == 'laser surface' and data.get('surfaceLaserMining', False):
+                            supports_any = True
+                            log_message(BLUE, "MINING", f"{ring_type} supports laser surface mining")
                             break
-                        elif mtype.lower() == 'surface' and not data.get('surfaceDeposit', False):
-                            supports_all = False
-                            log_message(YELLOW, "MINING", f"{ring_type} does not support surface mining")
+                        elif mtype.lower() == 'surface deposit' and data.get('surfaceDeposit', False):
+                            supports_any = True
+                            log_message(BLUE, "MINING", f"{ring_type} supports surface deposit mining")
                             break
-                        elif mtype.lower() == 'subsurface' and not data.get('subSurfaceDeposit', False):
-                            supports_all = False
-                            log_message(YELLOW, "MINING", f"{ring_type} does not support subsurface mining")
+                        elif mtype.lower() == 'sub surface deposit' and data.get('subSurfaceDeposit', False):
+                            supports_any = True
+                            log_message(BLUE, "MINING", f"{ring_type} supports sub surface deposit mining")
                             break
-                        elif mtype.lower() == 'core' and not data.get('core', False):
-                            supports_all = False
-                            log_message(YELLOW, "MINING", f"{ring_type} does not support core mining")
+                        elif mtype.lower() == 'core' and data.get('core', False):
+                            supports_any = True
+                            log_message(BLUE, "MINING", f"{ring_type} supports core mining")
                             break
-                    if supports_all:
+                    if supports_any:
                         valid_ring_types.append(ring_type)
-                        log_message(BLUE, "MINING", f"Added {ring_type} to valid ring types (supports all selected mining types)")
+                        log_message(BLUE, "MINING", f"Added {ring_type} to valid ring types (supports any selected mining type)")
 
             log_message(BLUE, "MINING", f"Final valid ring types: {valid_ring_types}")
             if not valid_ring_types:
