@@ -175,34 +175,34 @@ def get_valid_ring_types(material, mining_types):
         
     # Check each ring type against the selected mining methods
     for ring_type, data in material['ring_types'].items():
-        # Check if ring type supports ALL selected mining methods
-        supports_all = True
+        # Check if ring type supports ANY of the selected mining methods
+        supports_any = False
         for mining_type in mining_types:
             mining_type = mining_type.lower()
-            if mining_type == 'laser surface' and not data.get('surfaceLaserMining', False):
-                supports_all = False
+            if mining_type == 'laser surface' and data.get('surfaceLaserMining', False):
+                supports_any = True
                 break
-            elif mining_type == 'surface' and not data.get('surfaceDeposit', False):
-                supports_all = False
+            elif mining_type == 'surface deposit' and data.get('surfaceDeposit', False):
+                supports_any = True
                 break
-            elif mining_type == 'subsurface' and not data.get('subSurfaceDeposit', False):
-                supports_all = False
+            elif mining_type == 'sub surface deposit' and data.get('subSurfaceDeposit', False):
+                supports_any = True
                 break
-            elif mining_type == 'core' and not data.get('core', False):
-                supports_all = False
+            elif mining_type == 'core' and data.get('core', False):
+                supports_any = True
                 break
             elif mining_type == 'all':
                 # For 'All', check if the ring supports any mining method
-                if not any([
+                if any([
                     data.get('surfaceLaserMining', False),
                     data.get('surfaceDeposit', False),
                     data.get('subSurfaceDeposit', False),
                     data.get('core', False)
                 ]):
-                    supports_all = False
+                    supports_any = True
                     break
-        
-        if supports_all:
+
+        if supports_any:
             valid_ring_types.append(ring_type)
                     
     return valid_ring_types

@@ -26,24 +26,24 @@ def get_materials_for_ring_type(ring_type, mining_types):
             valid_materials.append(material_name)
             continue
 
-        # Check if ring supports ALL selected mining methods
-        supports_all = True
+        # Check if ring supports ANY of the selected mining methods
+        supports_any = False
         for mining_type in mining_types:
             mt_lower = mining_type.lower()
-            if mt_lower == 'laser surface' and not ring_data.get('surfaceLaserMining', False):
-                supports_all = False
+            if mt_lower == 'laser surface' and ring_data.get('surfaceLaserMining', False):
+                supports_any = True
                 break
-            elif mt_lower == 'surface' and not ring_data.get('surfaceDeposit', False):
-                supports_all = False
+            elif mt_lower == 'surface deposit' and ring_data.get('surfaceDeposit', False):
+                supports_any = True
                 break
-            elif mt_lower == 'subsurface' and not ring_data.get('subSurfaceDeposit', False):
-                supports_all = False
+            elif mt_lower == 'sub surface deposit' and ring_data.get('subSurfaceDeposit', False):
+                supports_any = True
                 break
-            elif mt_lower == 'core' and not ring_data.get('core', False):
-                supports_all = False
+            elif mt_lower == 'core' and ring_data.get('core', False):
+                supports_any = True
                 break
 
-        if supports_all:
+        if supports_any:
             valid_materials.append(material_name)
 
     return valid_materials
@@ -122,15 +122,21 @@ def build_any_material_query(params, coords, valid_ring_types, where_conditions,
             ms.signal_count,
             -- For each ring, determine what can be mined there (filtered by mining type)
             CASE
-                WHEN ms.mineral_type IS NOT NULL THEN
-                    ARRAY[ms.mineral_type]  -- Hotspot mineral
-                WHEN ms.ring_type = 'Icy' THEN
+                WHEN ms.mineral_type IS NOT NULL AND ms.ring_type = 'Icy' AND ms.mineral_type = ANY(""" + icy_array + """) THEN
+                    ARRAY[ms.mineral_type]
+                WHEN ms.mineral_type IS NOT NULL AND ms.ring_type = 'Rocky' AND ms.mineral_type = ANY(""" + rocky_array + """) THEN
+                    ARRAY[ms.mineral_type]
+                WHEN ms.mineral_type IS NOT NULL AND ms.ring_type = 'Metal Rich' AND ms.mineral_type = ANY(""" + metal_rich_array + """) THEN
+                    ARRAY[ms.mineral_type]
+                WHEN ms.mineral_type IS NOT NULL AND ms.ring_type = 'Metallic' AND ms.mineral_type = ANY(""" + metallic_array + """) THEN
+                    ARRAY[ms.mineral_type]
+                WHEN ms.mineral_type IS NULL AND ms.ring_type = 'Icy' THEN
                     """ + icy_array + """
-                WHEN ms.ring_type = 'Rocky' THEN
+                WHEN ms.mineral_type IS NULL AND ms.ring_type = 'Rocky' THEN
                     """ + rocky_array + """
-                WHEN ms.ring_type = 'Metal Rich' THEN
+                WHEN ms.mineral_type IS NULL AND ms.ring_type = 'Metal Rich' THEN
                     """ + metal_rich_array + """
-                WHEN ms.ring_type = 'Metallic' THEN
+                WHEN ms.mineral_type IS NULL AND ms.ring_type = 'Metallic' THEN
                     """ + metallic_array + """
                 ELSE
                     ARRAY[]::text[]
